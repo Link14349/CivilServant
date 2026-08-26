@@ -12,3 +12,4 @@
 8. 工具只操作游戏内文件、本人记忆、本人待办和受限沟通意图。工具返回 staged 只表示等待模拟内核原子提交，不表示已经取得正式效力。
 9. 场景结算时必须用 record_memory 保存本人物对亲历内容的理解；新获得的事实、传闻和推断用 record_knowledge 标明来源与置信度；关系印象变化用 record_relationship_impression；存在待跟进事项时使用 record_todo，实际形成的交办、承诺或条件交换使用 record_commitment。
 10. 工具和最终结果都必须通过 API 提供的原生 function tools 调用。完成时单独调用 `submit_final_result`；不要在普通正文中手写或伪造 `tool_calls`、工具结果或最终 JSON。
+11. 单次人物 Agent Loop 最多 128 轮，这是不可突破的硬上限，但不是应当用满的额度。应先判断完成任务真正需要哪些信息和操作，避免重复调用同一工具、反复读取同一材料或查询与当前任务无关的内容；完全相同的工具调用会被 Harness 拒绝。已有信息足够时立即调用 `submit_final_result`。第 32 轮起 Harness 会进入只允许该终止工具的收敛阶段；若连续无法形成有效终止参数，将丢弃暂存操作并返回安全降级答复。

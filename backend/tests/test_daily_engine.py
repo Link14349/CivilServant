@@ -1,13 +1,19 @@
+import pytest
+
 from civilservant.daily_engine import (
+    add_meeting_materials,
     actor_agent_projection,
     add_conversation_reply,
     add_player_speech,
+    begin_conversation_generation,
     begin_meeting_generation,
     close_day,
     close_scene,
+    commit_conversation_reply,
     commit_meeting_speech,
     create_daily_game,
     create_document_task,
+    create_notebook_note,
     hydrate_daily_actor_state,
     schedule_calendar_entry,
     start_conversation,
@@ -17,8 +23,10 @@ from civilservant.daily_engine import (
     template_conversation_utterance,
     template_meeting_utterance,
     to_daily_game_view,
+    update_notebook_note,
 )
-from civilservant.daily_models import PostSceneResult, SuperiorReaction
+from civilservant.daily_agent_tools import execute_agent_tool
+from civilservant.daily_models import AgentToolCall, PostSceneResult, SuperiorReaction
 from civilservant.daily_scenario import ACTORS, PUBLIC_REFERENCE_MATERIALS
 
 
@@ -71,6 +79,34 @@ def test_scheduled_field_visit_reserves_then_spends_on_execution_day() -> None:
     assert "样本" in current.state["active_scene"]["transcript"][0]["text"] or "口径" in current.state["active_scene"]["transcript"][0]["text"]
 
 
+def test_scheduled_meeting_keeps_selected_material_version_until_start() -> None:
+    current = schedule_calendar_entry(
+        game(),
+        idempotency_key="schedule-meeting-files",
+        target_date="2026-09-02",
+        kind="meeting",
+        title="北山材料核对会",
+        participant_ids=["mayor", "county_secretary"],
+        location_id=None,
+        meeting_type="coordination",
+        discussion_mode="chaired",
+        meeting_document_ids=["doc-county-request"],
+        notified=True,
+    )
+    scheduled = next(
+        item for item in current.state["calendar"] if item["title"] == "北山材料核对会"
+    )
+    selected_content = scheduled["meeting_materials"][0]["content"]
+    next(
+        item for item in current.state["documents"] if item["id"] == "doc-county-request"
+    )["content"] = "预约后形成的新版本内容"
+    current = close_day(current, idempotency_key="close-day-before-scheduled-meeting")
+    scene = current.state["active_scene"]
+    assert scene["kind"] == "meeting"
+    assert scene["meeting_materials"][0]["content"] == selected_content
+    assert "会前材料已向全体与会者发放" in scene["transcript"][0]["text"]
+
+
 def test_meeting_generation_uses_record_lease_and_player_can_cancel() -> None:
     current = start_meeting(
         game(),
@@ -108,6 +144,253 @@ def test_meeting_generation_uses_record_lease_and_player_can_cancel() -> None:
         assert "失效" in str(exc)
     else:
         raise AssertionError("取消的生成不应能够提交")
+
+
+def test_meeting_materials_are_versioned_and_visible_only_to_attendees() -> None:
+    current = start_meeting(
+        game(),
+        idempotency_key="start-meeting-with-files",
+        meeting_type="symposium",
+        discussion_mode="chaired",
+        title="北山材料核对会",
+        agenda="逐项核对就业和整改口径",
+        participant_ids=["mayor", "county_secretary"],
+        meeting_document_ids=["doc-environment", "doc-county-request"],
+    )
+    scene = current.state["active_scene"]
+    assert [item["document_id"] for item in scene["meeting_materials"]] == [
+        "doc-environment",
+        "doc-county-request",
+    ]
+    assert all(
+        set(item["audience_ids"]) == {"player", "mayor", "county_secretary"}
+        for item in scene["meeting_materials"]
+    )
+    assert "doc-environment" in {
+        item["id"] for item in actor_agent_projection(current, "mayor")["visible_documents"]
+    }
+    assert "doc-environment" not in {
+        item["id"] for item in actor_agent_projection(current, "banker")["visible_documents"]
+    }
+
+    original_snapshot = scene["meeting_materials"][0]["content"]
+    next(item for item in current.state["documents"] if item["id"] == "doc-environment")["content"] = "会后形成的新内容"
+    mayor_projection = actor_agent_projection(current, "mayor")
+    assert next(
+        item for item in mayor_projection["visible_documents"] if item["id"] == "doc-environment"
+    )["version"] == scene["meeting_materials"][0]["document_version"]
+    assert scene["meeting_materials"][0]["content"] == original_snapshot
+    tool_result, _ = execute_agent_tool(
+        current,
+        "mayor",
+        "utterance",
+        AgentToolCall(call_id="read-meeting-file", name="read_file", arguments={"document_id": "doc-environment"}),
+        [],
+    )
+    assert tool_result["data"]["content"] == original_snapshot
+
+
+def test_player_can_send_additional_file_during_meeting() -> None:
+    current = start_meeting(
+        game(),
+        idempotency_key="start-meeting-before-extra-file",
+        meeting_type="coordination",
+        discussion_mode="chaired",
+        title="防汛协调会",
+        agenda="核对险段与物资准备",
+        participant_ids=["mayor", "water_director"],
+        meeting_document_ids=["doc-flood"],
+    )
+    previous_record_version = current.state["active_scene"]["record_version"]
+    current = add_meeting_materials(
+        current,
+        idempotency_key="send-extra-file",
+        record_version=previous_record_version,
+        document_ids=["doc-fiscal-note"],
+    )
+    scene = current.state["active_scene"]
+    extra = next(
+        item for item in scene["meeting_materials"] if item["document_id"] == "doc-fiscal-note"
+    )
+    assert extra["distribution_kind"] == "during_meeting"
+    assert extra["distributed_record_version"] == previous_record_version + 1
+    assert scene["record_version"] == previous_record_version + 1
+    assert "临时向全体与会者发送" in scene["transcript"][-1]["text"]
+    assert "doc-fiscal-note" in {
+        item["id"] for item in actor_agent_projection(current, "water_director")["visible_documents"]
+    }
+
+    with pytest.raises(ValueError, match="已经发给"):
+        add_meeting_materials(
+            current,
+            idempotency_key="send-same-extra-file",
+            record_version=scene["record_version"],
+            document_ids=["doc-fiscal-note"],
+        )
+
+
+def test_player_cannot_distribute_a_document_they_cannot_access() -> None:
+    current = game()
+    current.state["documents"].append(
+        {
+            "id": "private-mayor-note",
+            "version": 1,
+            "title": "市长个人工作便笺",
+            "document_type": "note",
+            "author_id": "mayor",
+            "status": "draft",
+            "confidentiality": "个人",
+            "created_date": current.state["current_date"],
+            "due_date": None,
+            "summary": "玩家无权读取。",
+            "content": "不得通过会议材料接口越权发送。",
+            "recipient_ids": ["mayor"],
+            "source_document_ids": [],
+            "formal_effect": "个人便笺。",
+            "annotations": [],
+            "handled_date": None,
+        }
+    )
+    with pytest.raises(ValueError, match="无权"):
+        start_meeting(
+            current,
+            idempotency_key="start-with-private-file",
+            meeting_type="coordination",
+            discussion_mode="chaired",
+            title="越权材料测试会",
+            agenda="验证文件权限",
+            participant_ids=["mayor"],
+            meeting_document_ids=["private-mayor-note"],
+        )
+
+
+def test_conversation_generation_uses_record_lease_and_player_can_cancel() -> None:
+    current = start_conversation(
+        game(),
+        idempotency_key="start-streaming-talk",
+        actor_id="mayor",
+        channel="private_meeting",
+    )
+    current = add_player_speech(
+        current,
+        idempotency_key="ask-streaming-talk",
+        record_version=current.state["active_scene"]["record_version"],
+        text="请先说明财政边界。",
+    )
+    current, actor_id = begin_conversation_generation(current)
+    generation_id = current.state["active_scene"]["generation"]["id"]
+    assert actor_id == "mayor"
+    current = add_player_speech(
+        current,
+        idempotency_key="interrupt-streaming-talk",
+        record_version=current.state["active_scene"]["record_version"],
+        text="先等等，我补充一个条件。",
+    )
+    assert current.state["active_scene"]["generation"]["status"] == "canceled"
+    try:
+        commit_conversation_reply(
+            current,
+            generation_id=generation_id,
+            actor_id=actor_id,
+            utterance=template_conversation_utterance(current, actor_id, "请说明。"),
+        )
+    except ValueError as exc:
+        assert "失效" in str(exc)
+    else:
+        raise AssertionError("取消的谈话回应不应能够提交")
+
+
+def test_conversation_activity_keeps_only_event_level_summary() -> None:
+    current = start_conversation(
+        game(),
+        idempotency_key="start-private-summary-talk",
+        actor_id="mayor",
+        channel="private_meeting",
+    )
+    current = add_player_speech(
+        current,
+        idempotency_key="private-summary-speech",
+        record_version=current.state["active_scene"]["record_version"],
+        text="这句具体谈话不应出现在工作记录里。",
+    )
+    current = close_scene(
+        current,
+        idempotency_key="close-private-summary-talk",
+        record_version=current.state["active_scene"]["record_version"],
+    )
+    activity = to_daily_game_view(current).activity
+    assert any(item.title == "与周立衡进行了面谈" for item in activity)
+    assert "这句具体谈话" not in "".join(
+        "{}{}".format(item.title, item.summary) for item in activity
+    )
+
+
+def test_legacy_conversation_activity_is_folded_for_player_view() -> None:
+    current = game()
+    current.state["activity"].extend(
+        [
+            {
+                "id": "legacy-start",
+                "date": "2026-09-01",
+                "kind": "conversation",
+                "title": "与周立衡面谈",
+                "summary": "面谈已经开始。",
+                "visible": True,
+            },
+            {
+                "id": "legacy-speech",
+                "date": "2026-09-01",
+                "kind": "speech",
+                "title": "玩家发言",
+                "summary": "旧版具体发言",
+                "visible": True,
+            },
+            {
+                "id": "legacy-close",
+                "date": "2026-09-01",
+                "kind": "scene_closed",
+                "title": "与周立衡面谈结束",
+                "summary": "场景记录已经冻结。",
+                "visible": True,
+            },
+        ]
+    )
+    activity = to_daily_game_view(current).activity
+    assert len(activity) == 1
+    assert activity[0].title == "与周立衡进行了面谈"
+    assert activity[0].summary == ""
+
+
+def test_player_notebook_is_private_editable_and_costs_no_action_points() -> None:
+    current = game()
+    original_points = current.state["action_remaining"]
+    current = create_notebook_note(
+        current,
+        idempotency_key="create-private-note",
+        title="财政核实",
+        content="只有玩家知道的待核问题。",
+    )
+    note = current.state["notebook_notes"][0]
+    assert current.state["action_remaining"] == original_points
+    assert to_daily_game_view(current).notebook_notes[0].content == "只有玩家知道的待核问题。"
+    assert "只有玩家知道的待核问题" not in str(actor_agent_projection(current, "mayor"))
+
+    current = update_notebook_note(
+        current,
+        idempotency_key="update-private-note",
+        note_id=note["id"],
+        operation="update",
+        content="已经核实，仍需追问附件。",
+    )
+    assert current.state["notebook_notes"][0]["content"] == "已经核实，仍需追问附件。"
+    current = update_notebook_note(
+        current,
+        idempotency_key="delete-private-note",
+        note_id=note["id"],
+        operation="delete",
+    )
+    assert current.state["notebook_notes"] == []
+    assert current.state["action_remaining"] == original_points
 
 
 def test_actor_projection_does_not_contain_other_private_beliefs() -> None:

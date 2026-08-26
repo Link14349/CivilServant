@@ -3,6 +3,7 @@ from copy import deepcopy
 
 import pytest
 
+import civilservant.daily_llm as daily_llm_module
 from civilservant.daily_agent_tools import execute_agent_tool
 from civilservant.daily_engine import (
     act_on_document,
@@ -13,7 +14,7 @@ from civilservant.daily_engine import (
     create_daily_game,
     start_conversation,
 )
-from civilservant.daily_llm import DailyAgentProvider
+from civilservant.daily_llm import DailyAgentProvider, _extract_partial_json_string_field
 from civilservant.daily_models import (
     AgentToolCall,
     AgentToolEffect,
@@ -309,17 +310,25 @@ def test_live_agent_loop_executes_tool_then_forms_final_reply() -> None:
         channel="private_meeting",
     )
     provider = _LoopProvider()
+    traces = []
     result = provider.resolve_conversation(
         api_key="test-key",
         game=current,
         actor_id="mayor",
         player_message="财政边界由谁先说明？",
+        on_trace=traces.append,
     )
     assert result.text == "我会先让财政部门说明边界。"
     assert len(provider.bodies) == 2
     first_body = provider.bodies[0]
     assert first_body["tool_choice"] == "required"
     assert "response_format" not in first_body
+    assert "最多 128 轮" in first_body["messages"][0]["content"]
+    assert "第 32 轮起" in first_body["messages"][0]["content"]
+    loop_prompt = json.loads(first_body["messages"][1]["content"])["agent_loop"]
+    assert loop_prompt["preferred_completion_rounds"] == 32
+    assert loop_prompt["maximum_rounds"] == 128
+    assert "避免重复调用同一工具" in loop_prompt["rule"]
     functions = {item["function"]["name"]: item["function"] for item in first_body["tools"]}
     assert "list_contacts" in functions
     assert functions["list_contacts"]["parameters"]["type"] == "object"
@@ -329,6 +338,195 @@ def test_live_agent_loop_executes_tool_then_forms_final_reply() -> None:
     tool_result = json.loads(tool_message["content"])
     assert tool_result["ok"] is True
     assert any(item["id"] == "finance_director" for item in tool_result["data"])
+    assert any(item["kind"] == "tool_call" for item in traces)
+    assert any(item["kind"] == "tool_result" for item in traces)
+    assert traces[-1]["kind"] == "agent_complete"
+
+
+class _RepeatedToolProvider(DailyAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.bodies = []
+
+    def _post_chat(self, api_key, game, body):
+        self.bodies.append(deepcopy(body))
+        if isinstance(body["tool_choice"], dict):
+            return {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "forced-final",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "submit_final_result",
+                                        "arguments": json.dumps(
+                                            {"text": "不再重复查询，先按已知情况答复。", "used_belief_ids": []},
+                                            ensure_ascii=False,
+                                        ),
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "repeat-{}".format(len(self.bodies)),
+                                "type": "function",
+                                "function": {
+                                    "name": "list_contacts",
+                                    "arguments": json.dumps({"query": "财政"}),
+                                },
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+
+
+def test_repeated_tool_call_triggers_named_final_tool_choice() -> None:
+    current = start_conversation(
+        game(mode="live"),
+        idempotency_key="start-repeated-tool-loop",
+        actor_id="mayor",
+        channel="private_meeting",
+    )
+    provider = _RepeatedToolProvider()
+    traces = []
+    result = provider.resolve_conversation(
+        api_key="test-key",
+        game=current,
+        actor_id="mayor",
+        player_message="请说明财政边界。",
+        on_trace=traces.append,
+    )
+    assert result.text.startswith("不再重复查询")
+    assert len(provider.bodies) == 3
+    assert provider.bodies[2]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "submit_final_result"},
+    }
+    assert any(item["kind"] == "convergence_guard" for item in traces)
+    duplicate_result = json.loads(provider.bodies[2]["messages"][-1]["content"])
+    assert duplicate_result["duplicate_count"] == 2
+
+
+class _InvalidFinalProvider(DailyAgentProvider):
+    def _post_chat(self, api_key, game, body):
+        return {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "invalid-final",
+                                "type": "function",
+                                "function": {
+                                    "name": "submit_final_result",
+                                    "arguments": json.dumps({"text": ""}),
+                                },
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+
+
+def test_repeated_invalid_final_uses_safe_spoken_fallback() -> None:
+    current = start_conversation(
+        game(mode="live"),
+        idempotency_key="start-invalid-final-loop",
+        actor_id="mayor",
+        channel="private_meeting",
+    )
+    traces = []
+    result = _InvalidFinalProvider().resolve_conversation(
+        api_key="test-key",
+        game=current,
+        actor_id="mayor",
+        player_message="请说明情况。",
+        on_trace=traces.append,
+    )
+    assert result.text == "这件事我还需要进一步核实，暂时不能给出可靠答复。"
+    assert traces[-1]["kind"] == "safe_fallback"
+
+
+class _UniqueUntilForcedProvider(DailyAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.bodies = []
+
+    def _post_chat(self, api_key, game, body):
+        self.bodies.append(deepcopy(body))
+        if isinstance(body["tool_choice"], dict):
+            tool_name = "submit_final_result"
+            arguments = {"text": "已到收敛轮次，按现有材料答复。", "used_belief_ids": []}
+        else:
+            tool_name = "list_contacts"
+            arguments = {"query": "查询-{}".format(len(self.bodies))}
+        return {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call-{}".format(len(self.bodies)),
+                                "type": "function",
+                                "function": {
+                                    "name": tool_name,
+                                    "arguments": json.dumps(arguments, ensure_ascii=False),
+                                },
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+
+
+def test_round_32_forces_named_final_tool_but_keeps_128_hard_limit() -> None:
+    current = start_conversation(
+        game(mode="live"),
+        idempotency_key="start-force-round-32",
+        actor_id="mayor",
+        channel="private_meeting",
+    )
+    provider = _UniqueUntilForcedProvider()
+    result = provider.resolve_conversation(
+        api_key="test-key",
+        game=current,
+        actor_id="mayor",
+        player_message="请广泛核对后回答。",
+    )
+    assert result.text.startswith("已到收敛轮次")
+    assert len(provider.bodies) == 32
+    assert provider.bodies[30]["tool_choice"] == "required"
+    assert provider.bodies[31]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "submit_final_result"},
+    }
+    assert daily_llm_module.MAX_AGENT_LOOP_ROUNDS == 128
 
 
 class _LengthProvider(DailyAgentProvider):
@@ -432,3 +630,155 @@ def test_native_agent_loop_returns_tool_argument_error_for_model_repair() -> Non
     repair_message = provider.bodies[1]["messages"][-1]
     assert repair_message["role"] == "tool"
     assert "error_position" in repair_message["content"]
+
+
+def test_partial_final_tool_arguments_expose_only_complete_string_characters() -> None:
+    assert _extract_partial_json_string_field('{"text":"岚州', "text") == "岚州"
+    assert _extract_partial_json_string_field('{"text":"第一行\\n第二', "text") == "第一行\n第二"
+    assert _extract_partial_json_string_field('{"used_belief_ids":[],"text":"回应"}', "text") == "回应"
+    assert _extract_partial_json_string_field('{"text":"尚未完成\\u5c', "text") == "尚未完成"
+    assert _extract_partial_json_string_field('{"text":"完成\\ud83d\\udc4d"}', "text") == "完成👍"
+
+
+class _StreamingProvider(DailyAgentProvider):
+    def _post_chat_stream(self, api_key, game, body, *, on_text_update, is_cancelled):
+        assert body["stream"] is True
+        on_text_update("我")
+        on_text_update("我会先核对财政边界。")
+        return {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "stream-final",
+                                "type": "function",
+                                "function": {
+                                    "name": "submit_final_result",
+                                    "arguments": json.dumps(
+                                        {
+                                            "text": "我会先核对财政边界。",
+                                            "used_belief_ids": [],
+                                        },
+                                        ensure_ascii=False,
+                                    ),
+                                },
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+
+
+def test_agent_loop_forwards_incremental_final_text_updates() -> None:
+    current = start_conversation(
+        game(mode="live"),
+        idempotency_key="start-stream-callback",
+        actor_id="mayor",
+        channel="private_meeting",
+    )
+    updates = []
+    statuses = []
+    result = _StreamingProvider().resolve_conversation(
+        api_key="test-key",
+        game=current,
+        actor_id="mayor",
+        player_message="财政边界是什么？",
+        on_text_update=updates.append,
+        on_status=statuses.append,
+        is_cancelled=lambda: False,
+    )
+    assert result.text == "我会先核对财政边界。"
+    assert updates[:2] == ["我", "我会先核对财政边界。"]
+    assert statuses[-1] == "发言生成完成，正在写入会议记录…"
+
+
+class _FakeStreamResponse:
+    status_code = 200
+
+    def __init__(self, lines):
+        self.lines = lines
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def iter_lines(self):
+        yield from self.lines
+
+
+def test_deepseek_sse_tool_arguments_are_reassembled_and_exposed_as_text(monkeypatch) -> None:
+    def event(delta, finish_reason=None):
+        return "data: " + json.dumps(
+            {"choices": [{"delta": delta, "finish_reason": finish_reason}]},
+            ensure_ascii=False,
+        )
+
+    lines = [
+        event(
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call-final",
+                        "type": "function",
+                        "function": {
+                            "name": "submit_",
+                            "arguments": '{"text":"岚',
+                        },
+                    }
+                ]
+            }
+        ),
+        event(
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "function": {
+                            "name": "final_result",
+                            "arguments": "州逐",
+                        },
+                    }
+                ]
+            }
+        ),
+        event(
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "function": {
+                            "arguments": '字","used_belief_ids":[]}',
+                        },
+                    }
+                ]
+            }
+        ),
+        event({}, "tool_calls"),
+        "data: [DONE]",
+    ]
+    monkeypatch.setattr(
+        daily_llm_module.httpx,
+        "stream",
+        lambda *args, **kwargs: _FakeStreamResponse(lines),
+    )
+    updates = []
+    response = DailyAgentProvider()._post_chat_stream(
+        "test-key",
+        game(mode="live"),
+        {"stream": True},
+        on_text_update=updates.append,
+        is_cancelled=lambda: False,
+    )
+    tool_call = response["choices"][0]["message"]["tool_calls"][0]
+    assert tool_call["id"] == "call-final"
+    assert tool_call["function"]["name"] == "submit_final_result"
+    assert json.loads(tool_call["function"]["arguments"])["text"] == "岚州逐字"
+    assert updates == ["岚州逐", "岚州逐字"]

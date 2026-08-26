@@ -47,12 +47,15 @@ class ScheduleRequest(CommandRequest):
     location_id: Optional[str] = Field(default=None, max_length=128)
     meeting_type: Optional[MeetingType] = None
     discussion_mode: Optional[DiscussionMode] = None
+    meeting_document_ids: List[str] = Field(default_factory=list, max_length=12)
     notified: bool = True
 
     @model_validator(mode="after")
     def validate_meeting_fields(self) -> "ScheduleRequest":
         if self.kind == "meeting" and (not self.meeting_type or not self.discussion_mode):
             raise ValueError("安排会议时必须选择会议类型和讨论方式")
+        if self.kind != "meeting" and self.meeting_document_ids:
+            raise ValueError("只有会议日程可以附带会议材料")
         return self
 
 
@@ -73,6 +76,12 @@ class StartMeetingRequest(CommandRequest):
     title: str = Field(min_length=2, max_length=120)
     agenda: str = Field(min_length=2, max_length=1200)
     participant_ids: List[str] = Field(min_length=1, max_length=16)
+    meeting_document_ids: List[str] = Field(default_factory=list, max_length=12)
+
+
+class AddMeetingMaterialsRequest(CommandRequest):
+    record_version: int = Field(ge=0)
+    document_ids: List[str] = Field(min_length=1, max_length=12)
 
 
 class PlayerSpeechRequest(CommandRequest):
@@ -123,6 +132,23 @@ class CloseDayRequest(CommandRequest):
     pass
 
 
+class CreateNotebookNoteRequest(CommandRequest):
+    title: str = Field(default="未命名笔记", min_length=1, max_length=120)
+    content: str = Field(min_length=1, max_length=12000)
+
+
+class UpdateNotebookNoteRequest(CommandRequest):
+    operation: Literal["update", "delete"] = "update"
+    title: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    content: Optional[str] = Field(default=None, min_length=1, max_length=12000)
+
+    @model_validator(mode="after")
+    def validate_update_fields(self) -> "UpdateNotebookNoteRequest":
+        if self.operation == "update" and self.title is None and self.content is None:
+            raise ValueError("修改笔记时至少提供标题或正文")
+        return self
+
+
 class ActionBudgetView(BaseModel):
     total: int
     remaining: int
@@ -140,6 +166,24 @@ class BriefingItemView(BaseModel):
     calendar_entry_id: Optional[str] = None
 
 
+class MeetingMaterialView(BaseModel):
+    document_id: str
+    document_version: int
+    title: str
+    document_type: str
+    author_id: str
+    author_label: str
+    confidentiality: str
+    summary: str
+    content: str
+    source_document_ids: List[str]
+    formal_effect: str
+    annotations: List[str]
+    distribution_kind: Literal["pre_meeting", "during_meeting"]
+    distributed_record_version: int
+    audience_ids: List[str]
+
+
 class CalendarEntryView(BaseModel):
     id: str
     date: str
@@ -151,6 +195,7 @@ class CalendarEntryView(BaseModel):
     location_label: Optional[str] = None
     meeting_type: Optional[MeetingType] = None
     discussion_mode: Optional[DiscussionMode] = None
+    meeting_materials: List[MeetingMaterialView] = Field(default_factory=list)
     action_cost: int
     mandatory: bool
     status: Literal["scheduled", "tentative", "due", "active", "completed", "canceled", "conflict"]
@@ -251,6 +296,7 @@ class ActiveSceneView(BaseModel):
     location_id: Optional[str] = None
     notified: Optional[bool] = None
     participants: List[SceneParticipantView]
+    meeting_materials: List[MeetingMaterialView] = Field(default_factory=list)
     transcript: List[TranscriptTurnView]
     generation: GenerationView
     silence_count: int = 0
@@ -273,6 +319,14 @@ class ActivityView(BaseModel):
     title: str
     summary: str
     visible: bool = True
+
+
+class NotebookNoteView(BaseModel):
+    id: str
+    title: str
+    content: str
+    created_date: str
+    updated_date: str
 
 
 class ActionCatalogItemView(BaseModel):
@@ -312,6 +366,7 @@ class DailyGameView(BaseModel):
     metrics: List[MetricView]
     notifications: List[NotificationView]
     activity: List[ActivityView]
+    notebook_notes: List[NotebookNoteView]
     pending_tasks: List[str]
     action_catalog: ActionCatalogView
 

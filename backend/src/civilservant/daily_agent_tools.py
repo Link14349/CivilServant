@@ -340,6 +340,20 @@ def execute_agent_tool(
                     "agenda": record.get("agenda"),
                     "closed_date": record.get("closed_date"),
                     "resolution": record.get("resolution"),
+                    "meeting_materials": [
+                        {
+                            "document_id": item["document_id"],
+                            "document_version": item["document_version"],
+                            "title": item["title"],
+                            "author_id": item["author_id"],
+                            "summary": item["summary"],
+                            "content": item["content"],
+                            "formal_effect": item["formal_effect"],
+                            "distribution_kind": item["distribution_kind"],
+                        }
+                        for item in record.get("meeting_materials", [])
+                        if actor_id in item.get("audience_ids", [])
+                    ],
                     "transcript": [
                         {
                             "turn_id": item["id"],
@@ -490,6 +504,16 @@ def _visible_documents(
     staged_effects: Sequence[AgentToolEffect],
 ) -> List[Dict[str, Any]]:
     documents = [deepcopy(item) for item in game.state["documents"]]
+    scene = game.state.get("active_scene")
+    if scene and scene.get("kind") == "meeting" and actor_id in {
+        item["actor_id"] for item in scene.get("participants", [])
+    }:
+        for material in scene.get("meeting_materials", []):
+            if actor_id not in material.get("audience_ids", []):
+                continue
+            snapshot = _meeting_material_document(material)
+            documents = [item for item in documents if item["id"] != snapshot["id"]]
+            documents.append(snapshot)
     for effect in staged_effects:
         if effect.kind == "create_document":
             payload = effect.payload
@@ -524,6 +548,27 @@ def _visible_documents(
         for item in documents
         if item["author_id"] == actor_id or actor_id in item.get("recipient_ids", [])
     ]
+
+
+def _meeting_material_document(material: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": material["document_id"],
+        "version": material["document_version"],
+        "title": material["title"],
+        "document_type": material["document_type"],
+        "author_id": material["author_id"],
+        "status": material["status"],
+        "confidentiality": material["confidentiality"],
+        "created_date": material["created_date"],
+        "due_date": material.get("due_date"),
+        "summary": material["summary"],
+        "content": material["content"],
+        "recipient_ids": list(material.get("audience_ids", [])),
+        "source_document_ids": list(material["source_document_ids"]),
+        "formal_effect": material["formal_effect"],
+        "annotations": list(material["annotations"]),
+        "meeting_distribution": material["distribution_kind"],
+    }
 
 
 def _find_visible_document(

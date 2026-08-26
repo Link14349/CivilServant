@@ -19,8 +19,10 @@ from .daily_models import (
     DocumentView,
     GenerationView,
     IssueView,
+    MeetingMaterialView,
     MetricView,
     NotificationView,
+    NotebookNoteView,
     PostSceneResult,
     ReferenceMaterialView,
     SceneParticipantView,
@@ -48,8 +50,8 @@ from .daily_scenario import (
 from .models import StoredGame
 
 
-SCHEMA_VERSION = 3
-SUPPORTED_DAILY_SCHEMA_VERSIONS = {2, 3}
+SCHEMA_VERSION = 5
+SUPPORTED_DAILY_SCHEMA_VERSIONS = {2, 3, 4, 5}
 START_DATE = date(2026, 9, 1)
 DAILY_ACTION_POINTS = 4
 ACTION_COSTS = {
@@ -126,6 +128,7 @@ def create_daily_game(
         "briefing": [],
         "notifications": [],
         "activity": [],
+        "notebook_notes": [],
         "active_scene": None,
         "delayed_triggers": [],
         "event_history": [],
@@ -160,6 +163,7 @@ def create_daily_game(
             "location_id": None,
             "meeting_type": "standing_committee",
             "discussion_mode": "chaired",
+            "meeting_materials": [],
             "action_cost": 2,
             "mandatory": False,
             "status": "scheduled",
@@ -198,6 +202,7 @@ def hydrate_daily_actor_state(game: StoredGame) -> StoredGame:
         int(game.state.get("schema_version", 0)) != SCHEMA_VERSION
         or "commitments" not in game.state
         or "scene_archive" not in game.state
+        or "notebook_notes" not in game.state
         or any(
             actor_id not in relations
             or actor_id not in runtime
@@ -214,6 +219,7 @@ def hydrate_daily_actor_state(game: StoredGame) -> StoredGame:
     updated.state["schema_version"] = SCHEMA_VERSION
     updated.state.setdefault("commitments", [])
     updated.state.setdefault("scene_archive", [])
+    updated.state.setdefault("notebook_notes", [])
     updated_relations = updated.state.setdefault("relations", {})
     updated_runtime = updated.state.setdefault("actor_runtime", {})
     for actor_id in ACTORS:
@@ -233,6 +239,12 @@ def hydrate_daily_actor_state(game: StoredGame) -> StoredGame:
             relationships.setdefault(target_id, relationship)
     for document in updated.state.get("documents", []):
         document.setdefault("handled_date", None)
+    for entry in updated.state.get("calendar", []):
+        entry.setdefault("meeting_materials", [])
+    if updated.state.get("active_scene"):
+        updated.state["active_scene"].setdefault("meeting_materials", [])
+    for scene in updated.state.get("scene_archive", []):
+        scene.setdefault("meeting_materials", [])
     return updated
 
 
@@ -251,6 +263,7 @@ def schedule_calendar_entry(
     location_id: Optional[str],
     meeting_type: Optional[str],
     discussion_mode: Optional[str],
+    meeting_document_ids: Sequence[str] = (),
     notified: bool,
 ) -> StoredGame:
     _require_daily_active(game)
@@ -260,6 +273,9 @@ def schedule_calendar_entry(
         if meeting_type not in MEETING_TYPES:
             raise ValueError("未知的会议类型")
         cost = int(MEETING_TYPES[meeting_type]["cost"])
+        _validate_player_document_ids(game.state, meeting_document_ids)
+    elif meeting_document_ids:
+        raise ValueError("只有会议日程可以附带会议材料")
     else:
         cost = ACTION_COSTS[kind]
     _validate_actor_ids(participant_ids)
@@ -275,6 +291,14 @@ def schedule_calendar_entry(
         raise ValueError("这一天的确定日程已经超过行动点预算")
 
     updated = game.model_copy(deep=True)
+    audience_ids = ["player"] + list(dict.fromkeys(participant_ids))
+    meeting_materials = _snapshot_meeting_materials(
+        updated.state,
+        meeting_document_ids,
+        audience_ids=audience_ids,
+        distribution_kind="pre_meeting",
+        distributed_record_version=0,
+    ) if kind == "meeting" else []
     updated.state["calendar"].append(
         {
             "id": _new_id(updated.state, "cal"),
@@ -285,6 +309,7 @@ def schedule_calendar_entry(
             "location_id": location_id,
             "meeting_type": meeting_type,
             "discussion_mode": discussion_mode,
+            "meeting_materials": meeting_materials,
             "action_cost": cost,
             "mandatory": False,
             "status": "due" if target_date == updated.state["current_date"] else "scheduled",
@@ -314,6 +339,52 @@ def cancel_calendar_entry(
     _add_activity(updated.state, "schedule", "取消日程", "{}；原因：{}".format(entry["title"], reason))
     if entry["date"] == updated.state["current_date"]:
         _change_metric(updated.state, "org_credit", -1)
+    return _finish_command(updated, idempotency_key)
+
+
+def create_notebook_note(
+    game: StoredGame,
+    *,
+    idempotency_key: str,
+    title: str,
+    content: str,
+) -> StoredGame:
+    _require_daily_active(game)
+    updated = hydrate_daily_actor_state(game).model_copy(deep=True)
+    updated.state["notebook_notes"].append(
+        {
+            "id": _new_id(updated.state, "note"),
+            "title": title.strip(),
+            "content": content.strip(),
+            "created_date": updated.state["current_date"],
+            "updated_date": updated.state["current_date"],
+        }
+    )
+    return _finish_command(updated, idempotency_key)
+
+
+def update_notebook_note(
+    game: StoredGame,
+    *,
+    idempotency_key: str,
+    note_id: str,
+    operation: str,
+    title: Optional[str] = None,
+    content: Optional[str] = None,
+) -> StoredGame:
+    _require_daily_active(game)
+    updated = hydrate_daily_actor_state(game).model_copy(deep=True)
+    note = _find_by_id(updated.state["notebook_notes"], note_id)
+    if operation == "delete":
+        updated.state["notebook_notes"].remove(note)
+    elif operation == "update":
+        if title is not None:
+            note["title"] = title.strip()
+        if content is not None:
+            note["content"] = content.strip()
+        note["updated_date"] = updated.state["current_date"]
+    else:
+        raise ValueError("未知的笔记操作")
     return _finish_command(updated, idempotency_key)
 
 
@@ -351,7 +422,6 @@ def start_conversation(
     updated.state["active_scene"] = scene
     updated.state["day_phase"] = "scene_active"
     _mark_calendar_active(updated.state, calendar_entry_id)
-    _add_activity(updated.state, "conversation", scene["title"], "面谈已经开始。")
     return _finish_command(updated, idempotency_key)
 
 
@@ -364,6 +434,7 @@ def start_meeting(
     title: str,
     agenda: str,
     participant_ids: Sequence[str],
+    meeting_document_ids: Sequence[str] = (),
     calendar_entry_id: Optional[str] = None,
 ) -> StoredGame:
     _require_can_start_scene(game)
@@ -373,6 +444,7 @@ def start_meeting(
         raise ValueError("未知的讨论方式")
     unique_participants = list(dict.fromkeys(participant_ids))
     _validate_actor_ids(unique_participants)
+    _validate_player_document_ids(game.state, meeting_document_ids)
     if not unique_participants:
         raise ValueError("会议至少需要一名 NPC 参加")
     cost = int(MEETING_TYPES[meeting_type]["cost"])
@@ -405,21 +477,77 @@ def start_meeting(
             and _standing_committee_present_count(unique_participants) >= 6,
         }
     )
+    scene["meeting_materials"] = _snapshot_meeting_materials(
+        updated.state,
+        meeting_document_ids,
+        audience_ids=[item["actor_id"] for item in scene["participants"]],
+        distribution_kind="pre_meeting",
+        distributed_record_version=scene["record_version"] + 1,
+    )
     _append_transcript(
         scene,
         "system",
         "会议记录",
         "system",
-        "会议开始。议题：{}{}{}".format(
+        "会议开始。议题：{}{}{}{}".format(
             agenda.strip(),
             "" if agenda.strip().endswith(("。", "！", "？", "；")) else "。",
             MEETING_TYPES[meeting_type]["formal_effect"],
+            _meeting_material_announcement(scene["meeting_materials"], temporary=False),
         ),
     )
     updated.state["active_scene"] = scene
     updated.state["day_phase"] = "scene_active"
     _mark_calendar_active(updated.state, calendar_entry_id)
     _add_activity(updated.state, "meeting", scene["title"], "会议开始，采用{}。".format("自由磋商" if discussion_mode == "free" else "玩家主持"))
+    return _finish_command(updated, idempotency_key)
+
+
+def add_meeting_materials(
+    game: StoredGame,
+    *,
+    idempotency_key: str,
+    record_version: int,
+    document_ids: Sequence[str],
+) -> StoredGame:
+    _require_active_scene(game)
+    scene = game.state["active_scene"]
+    if scene["kind"] != "meeting":
+        raise ValueError("当前不是会议场景")
+    if int(scene["record_version"]) != record_version:
+        raise ValueError("会议记录已经更新，请刷新后重试")
+    if scene["generation"]["status"] == "thinking":
+        raise ValueError("仍有发言正在生成，请先打断或等待")
+    _validate_player_document_ids(game.state, document_ids)
+
+    updated = game.model_copy(deep=True)
+    updated_scene = updated.state["active_scene"]
+    additions = _snapshot_meeting_materials(
+        updated.state,
+        document_ids,
+        audience_ids=[item["actor_id"] for item in updated_scene["participants"]],
+        distribution_kind="during_meeting",
+        distributed_record_version=updated_scene["record_version"] + 1,
+    )
+    existing_versions = {
+        (item["document_id"], int(item["document_version"]))
+        for item in updated_scene.get("meeting_materials", [])
+    }
+    additions = [
+        item
+        for item in additions
+        if (item["document_id"], int(item["document_version"])) not in existing_versions
+    ]
+    if not additions:
+        raise ValueError("所选文件版本已经发给本次会议")
+    updated_scene.setdefault("meeting_materials", []).extend(additions)
+    _append_transcript(
+        updated_scene,
+        "system",
+        "会议记录",
+        "system",
+        _meeting_material_announcement(additions, temporary=True).strip(),
+    )
     return _finish_command(updated, idempotency_key)
 
 
@@ -481,7 +609,6 @@ def add_player_speech(
         scene["generation"]["status"] = "canceled"
         scene["generation"]["message"] = "玩家发言使本次生成失效。"
     _append_transcript(scene, "player", updated.player_name, "player", text.strip())
-    _add_activity(updated.state, "speech", "玩家发言", _shorten(text.strip(), 120))
     return _finish_command(updated, idempotency_key)
 
 
@@ -518,6 +645,84 @@ def add_conversation_reply(
         utterance.tool_effects,
         settlement=False,
     )
+    updated.version += 1
+    return updated
+
+
+def begin_conversation_generation(game: StoredGame) -> Tuple[StoredGame, str]:
+    _require_active_scene(game)
+    scene = game.state["active_scene"]
+    if scene["kind"] not in {"conversation", "superior_meeting"}:
+        raise ValueError("当前不是个别面谈")
+    if scene["generation"]["status"] == "thinking":
+        raise ValueError("谈话对象正在形成回应")
+    actor_id = next(
+        item["actor_id"]
+        for item in scene["participants"]
+        if item["actor_id"] != "player"
+    )
+    updated = game.model_copy(deep=True)
+    updated_scene = updated.state["active_scene"]
+    generation_id = _new_id(updated.state, "gen")
+    updated_scene["generation"] = {
+        "id": generation_id,
+        "status": "thinking",
+        "actor_id": actor_id,
+        "message": "{}正在组织回应，可由玩家继续发言打断。".format(ACTORS[actor_id]["name"]),
+        "started_record_version": updated_scene["record_version"],
+    }
+    updated.version += 1
+    return updated, actor_id
+
+
+def commit_conversation_reply(
+    game: StoredGame,
+    *,
+    generation_id: str,
+    actor_id: str,
+    utterance: AgentUtterance,
+) -> StoredGame:
+    _require_active_scene(game)
+    scene = game.state["active_scene"]
+    if scene["kind"] not in {"conversation", "superior_meeting"}:
+        raise ValueError("当前不是个别面谈")
+    generation = scene["generation"]
+    if (
+        generation.get("id") != generation_id
+        or generation.get("status") != "thinking"
+        or generation.get("actor_id") != actor_id
+        or int(generation.get("started_record_version", -1)) != int(scene["record_version"])
+    ):
+        raise ValueError("这次谈话回应生成已经失效")
+    _validate_used_beliefs(game, actor_id, utterance.used_belief_ids)
+    updated = game.model_copy(deep=True)
+    updated_scene = updated.state["active_scene"]
+    _append_transcript(
+        updated_scene,
+        actor_id,
+        ACTORS[actor_id]["name"],
+        "npc",
+        utterance.text,
+    )
+    for belief_id in utterance.used_belief_ids:
+        if (
+            belief_id not in {item["id"] for item in PUBLIC_REFERENCE_MATERIALS}
+            and belief_id not in updated.state["player_beliefs"]
+        ):
+            updated.state["player_beliefs"].append(belief_id)
+    _apply_agent_tool_effects(
+        updated.state,
+        updated_scene,
+        actor_id,
+        utterance.tool_effects,
+        settlement=False,
+    )
+    updated_scene["generation"] = {
+        "id": generation_id,
+        "status": "completed",
+        "actor_id": actor_id,
+        "message": "回应已经写入谈话记录。",
+    }
     updated.version += 1
     return updated
 
@@ -718,12 +923,25 @@ def close_scene(
     if calendar_entry_id:
         entry = _find_by_id(updated.state["calendar"], calendar_entry_id)
         entry["status"] = "completed"
-    _add_activity(
-        updated.state,
-        "scene_closed",
-        "{}结束".format(scene["title"]),
-        resolution.strip() if resolution else "场景记录已经冻结，人物开始处理会后事项。",
-    )
+    if scene["kind"] in {"conversation", "superior_meeting"}:
+        counterpart_id = next(
+            item["actor_id"]
+            for item in scene["participants"]
+            if item["actor_id"] != "player"
+        )
+        _add_activity(
+            updated.state,
+            "conversation",
+            "与{}进行了面谈".format(ACTORS[counterpart_id]["name"]),
+            "",
+        )
+    else:
+        _add_activity(
+            updated.state,
+            "scene_closed",
+            "{}结束".format(scene["title"]),
+            resolution.strip() if resolution else "场景记录已经冻结，人物开始处理会后事项。",
+        )
     archived_scene = deepcopy(scene)
     archived_scene["closed_date"] = updated.state["current_date"]
     archived_scene["resolution"] = resolution.strip() if resolution else None
@@ -1032,13 +1250,8 @@ def actor_agent_projection(game: StoredGame, actor_id: str) -> Dict[str, Any]:
     context.pop("beliefs", None)
     state = game.state
     scene = state.get("active_scene")
-    visible_document_ids = [
-        document["id"]
-        for document in state["documents"]
-        if actor_id == document["author_id"] or actor_id in document["recipient_ids"]
-    ]
-    visible_documents = [
-        {
+    visible_documents_by_id = {
+        document["id"]: {
             "id": document["id"],
             "version": document["version"],
             "title": document["title"],
@@ -1050,8 +1263,27 @@ def actor_agent_projection(game: StoredGame, actor_id: str) -> Dict[str, Any]:
             "confidentiality": document["confidentiality"],
         }
         for document in state["documents"]
-        if document["id"] in visible_document_ids
-    ]
+        if actor_id == document["author_id"] or actor_id in document["recipient_ids"]
+    }
+    if scene and scene["kind"] == "meeting":
+        participant_ids = {item["actor_id"] for item in scene["participants"]}
+        if actor_id in participant_ids:
+            for material in scene.get("meeting_materials", []):
+                if actor_id not in material.get("audience_ids", []):
+                    continue
+                visible_documents_by_id[material["document_id"]] = {
+                    "id": material["document_id"],
+                    "version": material["document_version"],
+                    "title": material["title"],
+                    "document_type": material["document_type"],
+                    "author_id": material["author_id"],
+                    "summary": material["summary"],
+                    "status": material["status"],
+                    "created_date": material["created_date"],
+                    "confidentiality": material["confidentiality"],
+                    "meeting_distribution": material["distribution_kind"],
+                }
+    visible_documents = list(visible_documents_by_id.values())
     known_people = known_people_projection(game, actor_id)
     known_people_ids = {item["id"] for item in known_people}
     if scene:
@@ -1105,6 +1337,15 @@ def actor_available_knowledge_ids(game: StoredGame, actor_id: str) -> List[str]:
         for item in game.state["documents"]
         if item["author_id"] == actor_id or actor_id in item.get("recipient_ids", [])
     ]
+    scene = game.state.get("active_scene")
+    if scene and scene["kind"] == "meeting" and actor_id in {
+        item["actor_id"] for item in scene["participants"]
+    }:
+        document_ids.extend(
+            item["document_id"]
+            for item in scene.get("meeting_materials", [])
+            if actor_id in item.get("audience_ids", [])
+        )
     return list(dict.fromkeys(runtime_ids + document_ids + [item["id"] for item in PUBLIC_REFERENCE_MATERIALS]))
 
 
@@ -1176,6 +1417,31 @@ def _retrieve_actor_tasks(runtime: Dict[str, Any]) -> List[Dict[str, Any]]:
         reverse=True,
     )
     return [deepcopy(item) for _, item in ranked[:10]]
+
+
+def _player_activity_views(state: Dict[str, Any]) -> List[ActivityView]:
+    visible: List[Dict[str, Any]] = []
+    for item in state["activity"]:
+        if not item.get("visible", True) or item.get("kind") == "speech":
+            continue
+        if item.get("kind") == "conversation" and item.get("summary") == "面谈已经开始。":
+            continue
+        normalized = deepcopy(item)
+        if (
+            normalized.get("kind") == "scene_closed"
+            and str(normalized.get("title", "")).startswith("与")
+            and str(normalized.get("title", "")).endswith("面谈结束")
+        ):
+            actor_name = str(normalized["title"])[1:-4]
+            normalized.update(
+                {
+                    "kind": "conversation",
+                    "title": "与{}进行了面谈".format(actor_name),
+                    "summary": "",
+                }
+            )
+        visible.append(normalized)
+    return [ActivityView(**item) for item in visible[-24:]]
 
 
 def to_daily_game_view(game: StoredGame) -> DailyGameView:
@@ -1261,7 +1527,8 @@ def to_daily_game_view(game: StoredGame) -> DailyGameView:
         active_scene=active_scene,
         metrics=metrics,
         notifications=[NotificationView(**item) for item in state["notifications"][-8:]],
-        activity=[ActivityView(**item) for item in state["activity"] if item.get("visible", True)][-24:],
+        activity=_player_activity_views(state),
+        notebook_notes=[NotebookNoteView(**item) for item in state["notebook_notes"]],
         pending_tasks=[
             "{} · {}（{}）".format(
                 ACTORS[item["author_id"]]["name"],
@@ -2035,7 +2302,21 @@ def _start_scheduled_meeting_in_place(game: StoredGame, entry: Dict[str, Any]) -
             and _standing_committee_present_count(entry["participant_ids"]) >= 6,
         }
     )
-    _append_transcript(scene, "system", "日程系统", "system", "预定日程已到，会议自动开始。")
+    scene["meeting_materials"] = deepcopy(entry.get("meeting_materials", []))
+    audience_ids = [item["actor_id"] for item in scene["participants"]]
+    for material in scene["meeting_materials"]:
+        material["audience_ids"] = audience_ids
+        material["distributed_record_version"] = scene["record_version"] + 1
+    _append_transcript(
+        scene,
+        "system",
+        "日程系统",
+        "system",
+        "预定日程已到，会议自动开始。{}{}".format(
+            MEETING_TYPES[meeting_type]["formal_effect"],
+            _meeting_material_announcement(scene["meeting_materials"], temporary=False),
+        ),
+    )
     state["active_scene"] = scene
     state["day_phase"] = "scene_active"
     entry["status"] = "active"
@@ -2084,6 +2365,68 @@ def _start_scheduled_conversation_in_place(
     entry["status"] = "active"
 
 
+def _validate_player_document_ids(
+    state: Dict[str, Any],
+    document_ids: Sequence[str],
+) -> None:
+    for document_id in dict.fromkeys(document_ids):
+        document = _find_by_id(state["documents"], document_id)
+        if document["author_id"] != "player" and "player" not in document.get("recipient_ids", []):
+            raise ValueError("文件不存在或玩家无权作为会议材料发送")
+
+
+def _snapshot_meeting_materials(
+    state: Dict[str, Any],
+    document_ids: Sequence[str],
+    *,
+    audience_ids: Sequence[str],
+    distribution_kind: str,
+    distributed_record_version: int,
+) -> List[Dict[str, Any]]:
+    materials: List[Dict[str, Any]] = []
+    for document_id in dict.fromkeys(document_ids):
+        document = _find_by_id(state["documents"], document_id)
+        materials.append(
+            {
+                "document_id": document["id"],
+                "document_version": int(document["version"]),
+                "title": document["title"],
+                "document_type": document["document_type"],
+                "author_id": document["author_id"],
+                "author_label": actor_label(document["author_id"]),
+                "status": document["status"],
+                "confidentiality": document["confidentiality"],
+                "created_date": document["created_date"],
+                "due_date": document.get("due_date"),
+                "summary": document["summary"],
+                "content": document["content"],
+                "source_document_ids": list(document["source_document_ids"]),
+                "formal_effect": document["formal_effect"],
+                "annotations": list(document["annotations"]),
+                "distribution_kind": distribution_kind,
+                "distributed_record_version": distributed_record_version,
+                "audience_ids": list(dict.fromkeys(audience_ids)),
+            }
+        )
+    return materials
+
+
+def _meeting_material_announcement(
+    materials: Sequence[Dict[str, Any]],
+    *,
+    temporary: bool,
+) -> str:
+    if not materials:
+        return " 本次会议未附会前材料。"
+    titles = "、".join(
+        "《{}》（第{}版）".format(item["title"], item["document_version"])
+        for item in materials
+    )
+    if temporary:
+        return "主持人临时向全体与会者发送会议材料：{}。".format(titles)
+    return " 会前材料已向全体与会者发放：{}。".format(titles)
+
+
 def _base_scene(
     state: Dict[str, Any],
     kind: str,
@@ -2104,6 +2447,7 @@ def _base_scene(
         "location_id": None,
         "notified": None,
         "participants": [],
+        "meeting_materials": [],
         "transcript": [],
         "generation": {
             "id": "idle",
@@ -2173,6 +2517,10 @@ def _scene_view(scene: Dict[str, Any]) -> Dict[str, Any]:
         "location_id": scene.get("location_id"),
         "notified": scene.get("notified"),
         "participants": [SceneParticipantView(**item).model_dump() for item in scene["participants"]],
+        "meeting_materials": [
+            MeetingMaterialView(**item).model_dump()
+            for item in scene.get("meeting_materials", [])
+        ],
         "transcript": [TranscriptTurnView(**item).model_dump() for item in scene["transcript"]],
         "generation": GenerationView(**generation).model_dump(),
         "silence_count": scene.get("silence_count", 0),
@@ -2193,6 +2541,10 @@ def _calendar_view(entry: Dict[str, Any]) -> CalendarEntryView:
         location_label=LOCATIONS.get(entry.get("location_id"), {}).get("label"),
         meeting_type=entry.get("meeting_type"),
         discussion_mode=entry.get("discussion_mode"),
+        meeting_materials=[
+            MeetingMaterialView(**item)
+            for item in entry.get("meeting_materials", [])
+        ],
         action_cost=int(entry["action_cost"]),
         mandatory=bool(entry["mandatory"]),
         status=entry["status"],

@@ -100,6 +100,7 @@ export function startMeeting(
     title: string;
     agenda: string;
     participant_ids: string[];
+    meeting_document_ids: string[];
   },
 ): Promise<Game> {
   return request<Game>(`/api/games/${game.id}/meetings`, {
@@ -107,6 +108,28 @@ export function startMeeting(
     headers: headers(game, credentials),
     body: JSON.stringify({ ...command(game), ...value }),
   });
+}
+
+export function addMeetingMaterials(
+  game: Game,
+  credentials: Credentials,
+  documentIds: string[],
+): Promise<Game> {
+  if (!game.active_scene || game.active_scene.kind !== "meeting") {
+    throw new Error("当前没有会议场景。");
+  }
+  return request<Game>(
+    `/api/games/${game.id}/scenes/${game.active_scene.id}/materials`,
+    {
+      method: "POST",
+      headers: headers(game, credentials),
+      body: JSON.stringify({
+        ...command(game),
+        record_version: game.active_scene.record_version,
+        document_ids: documentIds,
+      }),
+    },
+  );
 }
 
 export function startFieldVisit(
@@ -211,6 +234,7 @@ export function scheduleEntry(
     location_id?: string;
     meeting_type?: MeetingType;
     discussion_mode?: DiscussionMode;
+    meeting_document_ids?: string[];
     notified: boolean;
   },
 ): Promise<Game> {
@@ -230,6 +254,32 @@ export function cancelEntry(
     method: "PATCH",
     headers: headers(game, credentials),
     body: JSON.stringify({ ...command(game), operation: "cancel", reason: "玩家调整日程" }),
+  });
+}
+
+export function createNotebookNote(
+  game: Game,
+  credentials: Credentials,
+  title: string,
+  content: string,
+): Promise<Game> {
+  return request<Game>(`/api/games/${game.id}/notebook-notes`, {
+    method: "POST",
+    headers: headers(game, credentials),
+    body: JSON.stringify({ ...command(game), title, content }),
+  });
+}
+
+export function updateNotebookNote(
+  game: Game,
+  credentials: Credentials,
+  noteId: string,
+  value: { operation: "update" | "delete"; title?: string; content?: string },
+): Promise<Game> {
+  return request<Game>(`/api/games/${game.id}/notebook-notes/${noteId}`, {
+    method: "PATCH",
+    headers: headers(game, credentials),
+    body: JSON.stringify({ ...command(game), ...value }),
   });
 }
 

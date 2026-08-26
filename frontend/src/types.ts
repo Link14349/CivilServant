@@ -53,6 +53,7 @@ export interface CalendarEntry {
   location_label: string | null;
   meeting_type: MeetingType | null;
   discussion_mode: DiscussionMode | null;
+  meeting_materials: MeetingMaterial[];
   action_cost: number;
   mandatory: boolean;
   status: "scheduled" | "tentative" | "due" | "active" | "completed" | "canceled" | "conflict";
@@ -124,6 +125,24 @@ export interface SceneParticipant {
   can_vote: boolean;
 }
 
+export interface MeetingMaterial {
+  document_id: string;
+  document_version: number;
+  title: string;
+  document_type: string;
+  author_id: string;
+  author_label: string;
+  confidentiality: string;
+  summary: string;
+  content: string;
+  source_document_ids: string[];
+  formal_effect: string;
+  annotations: string[];
+  distribution_kind: "pre_meeting" | "during_meeting";
+  distributed_record_version: number;
+  audience_ids: string[];
+}
+
 export interface TranscriptTurn {
   id: string;
   speaker_id: string;
@@ -140,6 +159,37 @@ export interface Generation {
   message: string;
 }
 
+export interface StreamingGeneration {
+  generation_id: string;
+  actor_id: string;
+  actor_name: string;
+  text: string;
+  stage: string;
+  status: "thinking" | "streaming" | "completed" | "canceled" | "failed";
+  revision: number;
+}
+
+export interface AgentTraceEvent {
+  sequence: number;
+  kind: string;
+  round: number;
+  title: string;
+  actor_id?: string;
+  payload: unknown;
+}
+
+export interface AgentDebugTrace {
+  trace_id: string;
+  actor_id: string | null;
+  actor_name: string;
+  task: string;
+  status: "running" | "completed" | "fallback" | "failed" | "canceled";
+  revision: number;
+  replace?: boolean;
+  dropped_event_count: number;
+  events: AgentTraceEvent[];
+}
+
 export interface ActiveScene {
   id: string;
   kind: SceneKind;
@@ -153,6 +203,7 @@ export interface ActiveScene {
   location_id: string | null;
   notified: boolean | null;
   participants: SceneParticipant[];
+  meeting_materials: MeetingMaterial[];
   transcript: TranscriptTurn[];
   generation: Generation;
   silence_count: number;
@@ -175,6 +226,14 @@ export interface Activity {
   title: string;
   summary: string;
   visible: boolean;
+}
+
+export interface NotebookNote {
+  id: string;
+  title: string;
+  content: string;
+  created_date: string;
+  updated_date: string;
 }
 
 export interface ActionCatalogItem {
@@ -214,6 +273,7 @@ export interface Game {
   metrics: Metric[];
   notifications: Notification[];
   activity: Activity[];
+  notebook_notes: NotebookNote[];
   pending_tasks: string[];
   action_catalog: ActionCatalog;
 }

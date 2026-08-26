@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   actOnDocument,
+  addMeetingMaterials,
   cancelEntry,
+  createNotebookNote,
   createGame,
   finishDay,
   finishScene,
@@ -16,11 +18,13 @@ import {
   startFieldVisit,
   startMeeting,
   submitDocument,
+  updateNotebookNote,
   validateCredentials,
   voteMeeting,
 } from "./api";
 import type {
   Actor,
+  AgentDebugTrace,
   AppConfig,
   Credentials,
   DiscussionMode,
@@ -29,6 +33,7 @@ import type {
   MeetingType,
   ReferenceMaterial,
   ScheduleKind,
+  StreamingGeneration,
 } from "./types";
 
 const STORAGE = {
@@ -38,9 +43,10 @@ const STORAGE = {
   apiBase: "civilservant.deepseek.api-base",
   liveGame: "civilservant.game.live",
   templateGame: "civilservant.game.template",
+  agentDebug: "civilservant.agent-debug",
 };
 
-type DeskTab = "briefing" | "documents" | "reference" | "calendar" | "activity";
+type DeskTab = "briefing" | "documents" | "reference" | "calendar" | "activity" | "notebook";
 type ActionPanel = "talk" | "meeting" | "field" | "schedule" | "draft" | null;
 
 export default function App() {
@@ -161,10 +167,10 @@ function Workspace({ credentials, onChangeCredentials }: { credentials: Credenti
       .finally(() => setRestoring(false));
   }, [gameStorageKey]);
 
-  function rememberGame(next: Game) {
+  const rememberGame = useCallback((next: Game) => {
     localStorage.setItem(gameStorageKey, next.id);
     setGame(next);
-  }
+  }, [gameStorageKey]);
 
   if (restoring) return <CenteredMessage title="正在调取存档" message="请稍候……" loading />;
   if (!game) return <GameSetup credentials={credentials} initialError={restoreError} onStarted={rememberGame} onChangeCredentials={onChangeCredentials} />;
@@ -246,14 +252,69 @@ function GameBoard({ game, credentials, onGameChange, onNewGame, onChangeCredent
   const [preferredActorId, setPreferredActorId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [streamingGeneration, setStreamingGeneration] = useState<StreamingGeneration | null>(null);
+  const [sceneMinimized, setSceneMinimized] = useState(false);
+  const [debugMode, setDebugMode] = useState(() => sessionStorage.getItem(STORAGE.agentDebug) === "1");
+  const [agentTrace, setAgentTrace] = useState<AgentDebugTrace | null>(null);
+
+  const activeSceneId = game.active_scene?.id ?? null;
+  const canBrowseDuringScene = game.active_scene?.kind === "conversation" || game.active_scene?.kind === "superior_meeting";
 
   useEffect(() => {
-    if (game.active_scene?.generation.status !== "thinking") return;
-    const timer = window.setInterval(() => {
-      loadGame(game.id).then(onGameChange).catch(() => undefined);
-    }, 650);
-    return () => window.clearInterval(timer);
-  }, [game.id, game.active_scene?.generation.status, onGameChange]);
+    setSceneMinimized(false);
+  }, [activeSceneId]);
+
+  useEffect(() => {
+    const source = new EventSource(`/api/games/${game.id}/stream?debug=${debugMode ? "1" : "0"}`);
+    const updateGame = (event: Event) => {
+      try {
+        onGameChange(JSON.parse((event as MessageEvent<string>).data) as Game);
+      } catch {
+        // Ignore a malformed transient event; EventSource will continue or reconnect.
+      }
+    };
+    const updateGeneration = (event: Event) => {
+      try {
+        setStreamingGeneration(
+          JSON.parse((event as MessageEvent<string>).data) as StreamingGeneration,
+        );
+      } catch {
+        // Keep the last usable streaming snapshot.
+      }
+    };
+    const updateAgentTrace = (event: Event) => {
+      try {
+        const incoming = JSON.parse((event as MessageEvent<string>).data) as AgentDebugTrace;
+        setAgentTrace((current) => {
+          if (!current || incoming.replace !== false || current.trace_id !== incoming.trace_id) {
+            return incoming;
+          }
+          const events = new Map(current.events.map((item) => [item.sequence, item]));
+          for (const item of incoming.events) events.set(item.sequence, item);
+          return {
+            ...current,
+            ...incoming,
+            events: [...events.values()].sort((left, right) => left.sequence - right.sequence),
+          };
+        });
+      } catch {
+        // Keep the last complete trace snapshot.
+      }
+    };
+    source.addEventListener("game", updateGame);
+    source.addEventListener("generation", updateGeneration);
+    source.addEventListener("agent_trace", updateAgentTrace);
+    return () => source.close();
+  }, [debugMode, game.id, onGameChange]);
+
+  function toggleDebugMode() {
+    setDebugMode((current) => {
+      const next = !current;
+      if (next) sessionStorage.setItem(STORAGE.agentDebug, "1");
+      else sessionStorage.removeItem(STORAGE.agentDebug);
+      return next;
+    });
+  }
 
   async function mutate(operation: () => Promise<Game>) {
     setBusy(true);
@@ -268,23 +329,30 @@ function GameBoard({ game, credentials, onGameChange, onNewGame, onChangeCredent
     }
   }
 
+  function openDesk(nextTab: DeskTab) {
+    setTab(nextTab);
+    if (canBrowseDuringScene) setSceneMinimized(true);
+  }
+
   const dueNow = game.calendar.filter((item) => item.date === game.current_date && item.status !== "completed" && item.status !== "canceled");
+  const deskVisible = !game.active_scene || sceneMinimized;
   return (
     <div className="workbench-shell">
       <header className="topbar">
         <div className="brand-lockup"><div className="mini-seal">岚</div><div><span className="brand-title">领导工作台</span><span className="brand-subtitle">{game.player_name} · {game.role_title}</span></div></div>
         <div className="topbar-date"><strong>{formatDate(game.current_date)}</strong><span>到任第 {game.day_number} 天</span></div>
-        <div className="topbar-meta"><span className={`mode-badge ${game.mode}`}>{game.mode === "live" ? game.model : "模板调试"}</span><button className="topbar-button" onClick={onChangeCredentials}>模型设置</button><button className="topbar-button" onClick={() => { if (window.confirm("确定离开当前存档并新建游戏？")) onNewGame(); }}>新游戏</button></div>
+        <div className="topbar-meta"><span className={`mode-badge ${game.mode}`}>{game.mode === "live" ? game.model : "模板调试"}</span><button className={`topbar-button ${debugMode ? "debug-active" : ""}`} aria-pressed={debugMode} onClick={toggleDebugMode}>Agent 调试{debugMode ? "：开" : "：关"}</button><button className="topbar-button" onClick={onChangeCredentials}>模型设置</button><button className="topbar-button" onClick={() => { if (window.confirm("确定离开当前存档并新建游戏？")) onNewGame(); }}>新游戏</button></div>
       </header>
 
       <div className="daily-layout">
         <aside className="desk-nav">
           <div className="nav-label">今日案头</div>
-          <DeskNavButton active={tab === "briefing"} label="晨报" count={game.briefing.length} onClick={() => setTab("briefing")} />
-          <DeskNavButton active={tab === "documents"} label="文件" count={game.documents.filter((item) => item.status !== "archived").length} onClick={() => setTab("documents")} />
-          <DeskNavButton active={tab === "reference"} label="市情资料" count={game.reference_materials.length} onClick={() => setTab("reference")} />
-          <DeskNavButton active={tab === "calendar"} label="日程" count={dueNow.length} onClick={() => setTab("calendar")} />
-          <DeskNavButton active={tab === "activity"} label="工作记录" count={game.activity.length} onClick={() => setTab("activity")} />
+          <DeskNavButton active={deskVisible && tab === "briefing"} label="晨报" count={game.briefing.length} onClick={() => openDesk("briefing")} />
+          <DeskNavButton active={deskVisible && tab === "documents"} label="文件" count={game.documents.filter((item) => item.status !== "archived").length} onClick={() => openDesk("documents")} />
+          <DeskNavButton active={deskVisible && tab === "reference"} label="市情资料" count={game.reference_materials.length} onClick={() => openDesk("reference")} />
+          <DeskNavButton active={deskVisible && tab === "calendar"} label="日程" count={dueNow.length} onClick={() => openDesk("calendar")} />
+          <DeskNavButton active={deskVisible && tab === "activity"} label="工作记录" count={game.activity.length} onClick={() => openDesk("activity")} />
+          <DeskNavButton active={deskVisible && tab === "notebook"} label="笔记本" count={game.notebook_notes.length} onClick={() => openDesk("notebook")} />
           <div className="nav-metrics">
             <div className="nav-label">局势指标</div>
             {game.metrics.map((metric) => <div className="mini-metric" key={metric.id}><span>{metric.label}</span><b className={!metric.higher_is_better && metric.value > 60 ? "risk" : ""}>{metric.value}</b></div>)}
@@ -295,15 +363,25 @@ function GameBoard({ game, credentials, onGameChange, onNewGame, onChangeCredent
         <main className="daily-main">
           {error && <div className="error-banner" role="alert">{error}</div>}
           {game.notifications.slice(-2).map((item) => <div className={`notification ${item.tone}`} key={item.id}><strong>{item.title}</strong><span>{item.detail}</span></div>)}
-          {game.active_scene ? (
-            <SceneView game={game} credentials={credentials} busy={busy} onMutate={mutate} />
-          ) : (
+          {game.active_scene && sceneMinimized && (
+            <section className="scene-return-banner" aria-label="进行中的面谈">
+              <div><strong>面谈仍在进行</strong><span>{game.active_scene.title} · 谈话状态和人物生成均已保留</span></div>
+              <button onClick={() => setSceneMinimized(false)}>返回面谈</button>
+            </section>
+          )}
+          {game.active_scene && (
+            <div hidden={sceneMinimized}>
+              <SceneView game={game} credentials={credentials} busy={busy} streamingGeneration={streamingGeneration} onBrowse={canBrowseDuringScene ? () => setSceneMinimized(true) : undefined} onMutate={mutate} />
+            </div>
+          )}
+          {(!game.active_scene || sceneMinimized) && (
             <>
-              {tab === "briefing" && <BriefingDesk game={game} onOpenDocument={() => setTab("documents")} />}
+              {tab === "briefing" && <BriefingDesk game={game} onOpenDocument={() => openDesk("documents")} />}
               {tab === "documents" && <DocumentDesk game={game} credentials={credentials} busy={busy} onMutate={mutate} />}
               {tab === "reference" && <ReferenceDesk materials={game.reference_materials} />}
               {tab === "calendar" && <CalendarDesk game={game} credentials={credentials} busy={busy} onMutate={mutate} onAdd={() => setPanel("schedule")} />}
               {tab === "activity" && <ActivityDesk game={game} />}
+              {tab === "notebook" && <NotebookDesk game={game} credentials={credentials} busy={busy} onMutate={mutate} />}
             </>
           )}
         </main>
@@ -333,6 +411,7 @@ function GameBoard({ game, credentials, onGameChange, onNewGame, onChangeCredent
         </aside>
       </div>
       {panel && !game.active_scene && <ActionDrawer panel={panel} initialActorId={preferredActorId} game={game} credentials={credentials} busy={busy} onClose={() => setPanel(null)} onMutate={mutate} />}
+      {debugMode && <AgentDebugPanel trace={agentTrace} onDisable={toggleDebugMode} />}
     </div>
   );
 }
@@ -427,25 +506,241 @@ function DocumentReader({ document, actors, note, recipient, busy, readOnly = fa
 
 function CalendarDesk({ game, credentials, busy, onMutate, onAdd }: { game: Game; credentials: Credentials; busy: boolean; onMutate: (operation: () => Promise<Game>) => Promise<void>; onAdd: () => void }) {
   const entries = [...game.calendar].sort((a, b) => a.date.localeCompare(b.date));
-  return <><DeskHeading kicker="日程管理" title="今天与以后" detail="预定事项在执行当天扣除行动点；上级也可能临时要求汇报，并占用当天精力。" action={<button className="ghost-button" onClick={onAdd}>添加日程</button>} /><div className="calendar-list">{entries.length === 0 ? <div className="empty-card">目前没有日程。</div> : entries.map((entry) => <article key={entry.id}><time>{formatDate(entry.date)}</time><div><span>{scheduleKind(entry.kind)} · {entry.action_cost} 点</span><h3>{entry.title}</h3><p>{entry.participant_labels.join("、") || entry.location_label || "待确定"}</p><small>{entry.source} · {calendarStatus(entry.status)}</small></div>{entry.status === "scheduled" && !entry.mandatory && <button disabled={busy} onClick={() => void onMutate(() => cancelEntry(game, credentials, entry.id))}>取消</button>}</article>)}</div></>;
+  return <><DeskHeading kicker="日程管理" title="今天与以后" detail="预定事项在执行当天扣除行动点；上级也可能临时要求汇报，并占用当天精力。" action={<button className="ghost-button" onClick={onAdd}>添加日程</button>} /><div className="calendar-list">{entries.length === 0 ? <div className="empty-card">目前没有日程。</div> : entries.map((entry) => <article key={entry.id}><time>{formatDate(entry.date)}</time><div><span>{scheduleKind(entry.kind)} · {entry.action_cost} 点</span><h3>{entry.title}</h3><p>{entry.participant_labels.join("、") || entry.location_label || "待确定"}</p>{entry.meeting_materials.length > 0 && <small className="calendar-materials">会前材料：{entry.meeting_materials.map((item) => `《${item.title}》第${item.document_version}版`).join("、")}</small>}<small>{entry.source} · {calendarStatus(entry.status)}</small></div>{entry.status === "scheduled" && !entry.mandatory && <button disabled={busy} onClick={() => void onMutate(() => cancelEntry(game, credentials, entry.id))}>取消</button>}</article>)}</div></>;
+}
+
+const NEW_NOTE_ID = "__new-note__";
+
+function NotebookDesk({ game, credentials, busy, onMutate }: {
+  game: Game;
+  credentials: Credentials;
+  busy: boolean;
+  onMutate: (operation: () => Promise<Game>) => Promise<void>;
+}) {
+  const [selectedId, setSelectedId] = useState(game.notebook_notes.at(-1)?.id ?? NEW_NOTE_ID);
+  const initialNote = game.notebook_notes.find((item) => item.id === selectedId);
+  const [title, setTitle] = useState(initialNote?.title ?? "工作要点");
+  const [content, setContent] = useState(initialNote?.content ?? "");
+  const [pendingCreateCount, setPendingCreateCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (selectedId === NEW_NOTE_ID && pendingCreateCount !== null && game.notebook_notes.length > pendingCreateCount) {
+      const latest = game.notebook_notes.at(-1)!;
+      setSelectedId(latest.id);
+      setTitle(latest.title);
+      setContent(latest.content);
+      setPendingCreateCount(null);
+      return;
+    }
+    if (selectedId !== NEW_NOTE_ID && !game.notebook_notes.some((item) => item.id === selectedId)) {
+      const fallback = game.notebook_notes.at(-1);
+      setSelectedId(fallback?.id ?? NEW_NOTE_ID);
+      setTitle(fallback?.title ?? "工作要点");
+      setContent(fallback?.content ?? "");
+    }
+  }, [game.notebook_notes, pendingCreateCount, selectedId]);
+
+  function chooseNote(noteId: string) {
+    const note = game.notebook_notes.find((item) => item.id === noteId);
+    if (!note) return;
+    setSelectedId(note.id);
+    setTitle(note.title);
+    setContent(note.content);
+  }
+
+  function newNote() {
+    setSelectedId(NEW_NOTE_ID);
+    setTitle("工作要点");
+    setContent("");
+  }
+
+  async function saveNote() {
+    if (!title.trim() || !content.trim()) return;
+    if (selectedId === NEW_NOTE_ID) {
+      setPendingCreateCount(game.notebook_notes.length);
+      await onMutate(() => createNotebookNote(game, credentials, title.trim(), content.trim()));
+      return;
+    }
+    await onMutate(() => updateNotebookNote(game, credentials, selectedId, {
+      operation: "update",
+      title: title.trim(),
+      content: content.trim(),
+    }));
+  }
+
+  async function deleteNote() {
+    if (selectedId === NEW_NOTE_ID || !window.confirm("删除这条私人笔记？删除后无法恢复。")) return;
+    const noteId = selectedId;
+    setSelectedId(NEW_NOTE_ID);
+    setTitle("工作要点");
+    setContent("");
+    await onMutate(() => updateNotebookNote(game, credentials, noteId, { operation: "delete" }));
+  }
+
+  return (
+    <>
+      <DeskHeading
+        kicker="私人笔记本"
+        title="随手记下判断与待核问题"
+        detail="笔记只供玩家本人查看，不进入人物 Agent 上下文，不产生正式效力，也不消耗行动点。"
+        action={<button className="ghost-button" onClick={newNote}>新建笔记</button>}
+      />
+      <div className="notebook-layout">
+        <nav className="notebook-list" aria-label="私人笔记目录">
+          {game.notebook_notes.length === 0 && <p>还没有保存的笔记。</p>}
+          {[...game.notebook_notes].reverse().map((note) => (
+            <button className={selectedId === note.id ? "active" : ""} key={note.id} onClick={() => chooseNote(note.id)}>
+              <strong>{note.title}</strong>
+              <span>更新于 {note.updated_date}</span>
+              <small>{note.content}</small>
+            </button>
+          ))}
+        </nav>
+        <article className="notebook-editor">
+          <label className="field-label" htmlFor="notebook-title">标题</label>
+          <input id="notebook-title" className="text-input" maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} />
+          <label className="field-label" htmlFor="notebook-content">正文</label>
+          <textarea id="notebook-content" rows={16} maxLength={12000} value={content} onChange={(event) => setContent(event.target.value)} placeholder="例如：财政口径仍需与水利局附件交叉核实；下次面谈追问资金来源。" />
+          <footer>
+            {selectedId !== NEW_NOTE_ID && <button className="danger-text-button" disabled={busy} onClick={() => void deleteNote()}>删除</button>}
+            <span>{content.length} / 12000</span>
+            <button className="primary-button" disabled={busy || !title.trim() || !content.trim()} onClick={() => void saveNote()}>{busy ? "正在保存…" : selectedId === NEW_NOTE_ID ? "保存笔记" : "保存修改"}</button>
+          </footer>
+        </article>
+      </div>
+    </>
+  );
 }
 
 function ActivityDesk({ game }: { game: Game }) {
-  return <><DeskHeading kicker="工作记录" title="已经发生的事" detail="这里只显示玩家可以看到的工作痕迹；人物私下联络和未被你获知的行动不会自动出现。" /><div className="activity-timeline">{[...game.activity].reverse().map((item) => <article key={item.id}><time>{item.date}</time><div><span>{item.kind}</span><h3>{item.title}</h3><p>{item.summary}</p></div></article>)}</div>{game.pending_tasks.length > 0 && <section className="pending-box"><h2>等待中的文稿</h2>{game.pending_tasks.map((item) => <p key={item}>{item}</p>)}</section>}</>;
+  return <><DeskHeading kicker="工作记录" title="已经发生的事" detail="这里只记录事件级工作痕迹；面谈不会展示逐句对话，人物私下联络和未被你获知的行动也不会自动出现。" /><div className="activity-timeline">{[...game.activity].reverse().map((item) => <article key={item.id}><time>{item.date}</time><div><span>{item.kind}</span><h3>{item.title}</h3>{item.summary && <p>{item.summary}</p>}</div></article>)}</div>{game.pending_tasks.length > 0 && <section className="pending-box"><h2>等待中的文稿</h2>{game.pending_tasks.map((item) => <p key={item}>{item}</p>)}</section>}</>;
 }
 
-function SceneView({ game, credentials, busy, onMutate }: { game: Game; credentials: Credentials; busy: boolean; onMutate: (operation: () => Promise<Game>) => Promise<void> }) {
+function AgentDebugPanel({ trace, onDisable }: { trace: AgentDebugTrace | null; onDisable: () => void }) {
+  const [collapsed, setCollapsed] = useState(() => trace === null);
+  const eventListRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (trace?.status === "running") setCollapsed(false);
+  }, [trace?.status, trace?.trace_id]);
+
+  useEffect(() => {
+    if (!collapsed && eventListRef.current) {
+      eventListRef.current.scrollTop = eventListRef.current.scrollHeight;
+    }
+  }, [collapsed, trace?.revision]);
+
+  return (
+    <aside className={`agent-debug-panel ${collapsed ? "collapsed" : ""}`} aria-label="Agent 调试轨迹">
+      <header>
+        <div>
+          <strong>Agent 调试轨迹</strong>
+          <span>{trace ? `${trace.actor_name} · ${trace.task} · ${debugTraceStatus(trace.status)}` : "等待下一次 Agent 运行"}</span>
+        </div>
+        <button onClick={() => setCollapsed((current) => !current)}>{collapsed ? "展开" : "收起"}</button>
+        <button onClick={onDisable}>关闭</button>
+      </header>
+      {!collapsed && (
+        <>
+          <p className="debug-disclaimer">显示每轮模型请求、工具调用、成败、协议修复和终止状态；不展示隐藏思维链、NPC 私有内容或文件正文，API Key 会被过滤。</p>
+          <div className="agent-debug-events" ref={eventListRef}>
+            {!trace && <div className="debug-empty">发起人物对话、会议发言、场景结算或上级材料反应后，轨迹会实时出现在这里。</div>}
+            {Boolean(trace?.dropped_event_count) && <div className="debug-truncated">轨迹过长，服务端已丢弃最早的 {trace?.dropped_event_count} 条调试事件。</div>}
+            {trace?.events.map((event) => (
+              <article className={`debug-event kind-${event.kind}`} key={`${trace.trace_id}-${event.sequence}`}>
+                <div><b>#{event.sequence}</b><span>{event.round > 0 ? `第 ${event.round} 轮` : "系统"}</span><em>{event.kind}</em></div>
+                <h3>{event.title}</h3>
+                {event.actor_id && <small>人物：{event.actor_id}</small>}
+                <pre>{JSON.stringify(event.payload, null, 2)}</pre>
+              </article>
+            ))}
+          </div>
+        </>
+      )}
+    </aside>
+  );
+}
+
+function SceneView({ game, credentials, busy, streamingGeneration, onBrowse, onMutate }: {
+  game: Game;
+  credentials: Credentials;
+  busy: boolean;
+  streamingGeneration: StreamingGeneration | null;
+  onBrowse?: () => void;
+  onMutate: (operation: () => Promise<Game>) => Promise<void>;
+}) {
   const scene = game.active_scene!;
   const [speech, setSpeech] = useState("");
   const [resolution, setResolution] = useState("");
+  const [typed, setTyped] = useState({ generationId: "", text: "" });
+  const [dismissedGenerationId, setDismissedGenerationId] = useState("");
+  const [materialDocumentId, setMaterialDocumentId] = useState("");
   const isMeeting = scene.kind === "meeting";
   const thinking = scene.generation.status === "thinking";
+  const availableMeetingDocuments = isMeeting
+    ? game.documents.filter((document) => !scene.meeting_materials.some(
+      (material) => material.document_id === document.id && material.document_version === document.version,
+    ))
+    : [];
+  const selectedMaterialDocumentId = availableMeetingDocuments.some((item) => item.id === materialDocumentId)
+    ? materialDocumentId
+    : availableMeetingDocuments[0]?.id ?? "";
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const stream = streamingGeneration?.generation_id === scene.generation.id
+    ? streamingGeneration
+    : null;
+  const targetText = stream?.text ?? "";
+
+  useEffect(() => {
+    if (!stream) return;
+    if (typed.generationId !== stream.generation_id) {
+      setTyped({ generationId: stream.generation_id, text: "" });
+      setDismissedGenerationId("");
+      return;
+    }
+    if (typed.text === targetText) return;
+    if (!targetText.startsWith(typed.text)) {
+      setTyped({ generationId: stream.generation_id, text: targetText });
+      return;
+    }
+    const nextCharacter = Array.from(targetText.slice(typed.text.length))[0];
+    if (!nextCharacter) return;
+    const timer = window.setTimeout(() => {
+      setTyped((current) => ({ ...current, text: current.text + nextCharacter }));
+    }, 18);
+    return () => window.clearTimeout(timer);
+  }, [stream, targetText, typed]);
+
+  useEffect(() => {
+    if (!stream || stream.status !== "completed" || typed.text !== targetText || !targetText) return;
+    const timer = window.setTimeout(() => setDismissedGenerationId(stream.generation_id), 260);
+    return () => window.clearTimeout(timer);
+  }, [stream, targetText, typed.text]);
+
+  useEffect(() => {
+    if (!stream || !["canceled", "failed"].includes(stream.status)) return;
+    const timer = window.setTimeout(() => setDismissedGenerationId(stream.generation_id), 900);
+    return () => window.clearTimeout(timer);
+  }, [stream]);
+
+  const showStream = Boolean(
+    stream
+    && stream.generation_id !== dismissedGenerationId
+    && (stream.status === "thinking" || stream.text),
+  );
+  const lastTurn = scene.transcript.at(-1);
+  const committedTurnIsStream = Boolean(
+    showStream
+    && lastTurn
+    && lastTurn.speaker_id === stream?.actor_id
+    && lastTurn.text === targetText,
+  );
+  const visibleTranscript = committedTurnIsStream ? scene.transcript.slice(0, -1) : scene.transcript;
 
   useEffect(() => {
     const element = transcriptRef.current;
     if (element) element.scrollTop = element.scrollHeight;
-  }, [scene.transcript]);
+  }, [scene.transcript, typed.text]);
 
   async function speak() {
     if (!speech.trim()) return;
@@ -454,7 +749,59 @@ function SceneView({ game, credentials, busy, onMutate }: { game: Game; credenti
     await onMutate(() => sendPlayerSpeech(game, credentials, text));
   }
 
-  return <section className="scene-shell"><header className="scene-header"><div><p className="section-kicker">{sceneKind(scene.kind)} · 已消耗 {scene.action_cost} 点</p><h1>{scene.title}</h1>{scene.agenda && <span>议题：{scene.agenda}</span>}</div>{thinking && <div className="thinking"><i /><span>{scene.generation.message}</span></div>}</header><div className="participant-strip">{scene.participants.map((item) => <span key={item.actor_id}>{item.name}<small>{item.attendance_role === "chair" ? "主持" : item.can_vote ? "成员" : "列席"}</small></span>)}</div><div className="transcript" aria-live="polite" ref={transcriptRef}>{scene.transcript.map((turn) => <article className={turn.speaker_type} key={turn.id}><div>{turn.speaker_name}</div><p>{turn.text}</p></article>)}</div>{scene.generation.status === "canceled" && <p className="generation-note">{scene.generation.message}</p>}{isMeeting && <div className="meeting-controls"><span>{scene.discussion_mode === "free" ? "自由磋商：参会者会自行判断是否发言" : "主持磋商：由你点名发言"}</span>{scene.discussion_mode === "free" ? <button disabled={busy || thinking} onClick={() => void onMutate(() => generateMeetingSpeech(game, credentials))}>让会议继续</button> : <div className="nominate-list">{scene.participants.filter((item) => item.actor_id !== "player").map((item) => <button disabled={busy || thinking} key={item.actor_id} onClick={() => void onMutate(() => generateMeetingSpeech(game, credentials, item.actor_id))}>请{item.name}发言</button>)}</div>}</div>}<div className="speech-box"><label htmlFor="player-speech">你的发言或追问</label><textarea id="player-speech" rows={4} value={speech} maxLength={2400} onChange={(event) => setSpeech(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!busy) void speak(); } }} placeholder={thinking ? "你可以随时发言，正在生成的 NPC 发言会被中断。" : "可以追问事实、表明目标、划定红线或作出交办。"} /><button className="primary-button" disabled={busy || !speech.trim()} onClick={() => void speak()}>{thinking ? "打断并发言" : "发言"}</button></div>{scene.can_vote && <div className="vote-box"><label htmlFor="resolution">拟表决事项</label><textarea id="resolution" rows={3} value={resolution} onChange={(event) => setResolution(event.target.value)} placeholder="写清需要集体表决的决定。" />{scene.vote_result ? <p>{scene.vote_result}</p> : <button disabled={busy || !resolution.trim() || thinking} onClick={() => void onMutate(() => voteMeeting(game, credentials, resolution.trim()))}>提请表决</button>}</div>}<div className="scene-footer"><span>结束后，人物会依据会谈内容形成记忆，并可能联络他人、准备材料或提出后续行动。</span><button className="ghost-button" disabled={busy || thinking} onClick={() => void onMutate(() => finishScene(game, credentials, resolution.trim()))}>结束并结算</button></div></section>;
+  async function shareMeetingMaterial() {
+    if (!selectedMaterialDocumentId) return;
+    await onMutate(() => addMeetingMaterials(game, credentials, [selectedMaterialDocumentId]));
+    setMaterialDocumentId("");
+  }
+
+  const generationStatus = stream?.stage || scene.generation.message;
+  return (
+    <section className="scene-shell">
+      <header className="scene-header">
+        <div>
+          <p className="section-kicker">{sceneKind(scene.kind)} · 已消耗 {scene.action_cost} 点</p>
+          <h1>{scene.title}</h1>
+          {scene.agenda && <span>议题：{scene.agenda}</span>}
+        </div>
+        <div className="scene-header-actions">
+          {onBrowse && <button className="browse-desk-button" onClick={onBrowse}>查看案头材料</button>}
+          {thinking && <div className="thinking"><i /><span>{generationStatus}</span></div>}
+        </div>
+      </header>
+      <div className="participant-strip">
+        {scene.participants.map((item) => <span key={item.actor_id}>{item.name}<small>{item.attendance_role === "chair" ? "主持" : item.can_vote ? "成员" : "列席"}</small></span>)}
+      </div>
+      {isMeeting && (
+        <section className="meeting-material-panel" aria-label="本次会议材料">
+          <header>
+            <div><strong>本次会议材料</strong><span>材料按发送时版本冻结，仅向本次全体与会者开放。</span></div>
+            <div className="meeting-material-send">
+              <select aria-label="选择临时发送的会议材料" value={selectedMaterialDocumentId} onChange={(event) => setMaterialDocumentId(event.target.value)} disabled={busy || thinking || availableMeetingDocuments.length === 0}>
+                {availableMeetingDocuments.length === 0 ? <option value="">没有可追加的新版本</option> : availableMeetingDocuments.map((document) => <option key={`${document.id}-${document.version}`} value={document.id}>{document.title} · 第 {document.version} 版</option>)}
+              </select>
+              <button disabled={busy || thinking || !selectedMaterialDocumentId} onClick={() => void shareMeetingMaterial()}>临时发送</button>
+            </div>
+          </header>
+          {scene.meeting_materials.length === 0 ? <p className="meeting-material-empty">本次会议尚未附材料，可在会议中临时发送。</p> : <div className="meeting-material-list">{scene.meeting_materials.map((material) => <details key={`${material.document_id}-${material.document_version}`}><summary><span>{material.distribution_kind === "pre_meeting" ? "会前材料" : "临时材料"}</span><strong>{material.title}</strong><small>第 {material.document_version} 版 · 已发给 {material.audience_ids.length} 名与会者</small></summary><div><p>{material.summary}</p><pre>{material.content}</pre><em>{material.formal_effect}</em></div></details>)}</div>}
+        </section>
+      )}
+      <div className="transcript" aria-live="polite" ref={transcriptRef}>
+        {visibleTranscript.map((turn) => <article className={turn.speaker_type} key={turn.id}><div>{turn.speaker_name}</div><p>{turn.text}</p></article>)}
+        {showStream && stream && (
+          <article className={`npc streaming ${stream.status}`} key={`stream-${stream.generation_id}`}>
+            <div>{stream.actor_name}</div>
+            <p>{typed.text || <span className="stream-placeholder">……</span>}<i className="typing-caret" aria-hidden="true" /></p>
+          </article>
+        )}
+      </div>
+      {(scene.generation.status === "canceled" || scene.generation.status === "discarded") && <p className="generation-note">{scene.generation.message}</p>}
+      {isMeeting && <div className="meeting-controls"><span>{scene.discussion_mode === "free" ? "自由磋商：参会者会自行判断是否发言" : "主持磋商：由你点名发言"}</span>{scene.discussion_mode === "free" ? <button disabled={busy || thinking} onClick={() => void onMutate(() => generateMeetingSpeech(game, credentials))}>让会议继续</button> : <div className="nominate-list">{scene.participants.filter((item) => item.actor_id !== "player").map((item) => <button disabled={busy || thinking} key={item.actor_id} onClick={() => void onMutate(() => generateMeetingSpeech(game, credentials, item.actor_id))}>请{item.name}发言</button>)}</div>}</div>}
+      <div className="speech-box"><label htmlFor="player-speech">你的发言或追问</label><textarea id="player-speech" rows={4} value={speech} maxLength={2400} onChange={(event) => setSpeech(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!busy) void speak(); } }} placeholder={thinking ? "你可以随时发言，正在生成的 NPC 发言会被中断。" : "可以追问事实、表明目标、划定红线或作出交办。"} /><button className="primary-button" disabled={busy || !speech.trim()} onClick={() => void speak()}>{thinking ? "打断并发言" : "发言"}</button></div>
+      {scene.can_vote && <div className="vote-box"><label htmlFor="resolution">拟表决事项</label><textarea id="resolution" rows={3} value={resolution} onChange={(event) => setResolution(event.target.value)} placeholder="写清需要集体表决的决定。" />{scene.vote_result ? <p>{scene.vote_result}</p> : <button disabled={busy || !resolution.trim() || thinking} onClick={() => void onMutate(() => voteMeeting(game, credentials, resolution.trim()))}>提请表决</button>}</div>}
+      <div className="scene-footer"><span>结束后，人物会依据会谈内容形成记忆，并可能联络他人、准备材料或提出后续行动。</span><button className="ghost-button" disabled={busy || thinking} onClick={() => void onMutate(() => finishScene(game, credentials, resolution.trim()))}>结束并结算</button></div>
+    </section>
+  );
 }
 
 function ActionDrawer({ panel, initialActorId, game, credentials, busy, onClose, onMutate }: { panel: Exclude<ActionPanel, null>; initialActorId: string | null; game: Game; credentials: Credentials; busy: boolean; onClose: () => void; onMutate: (operation: () => Promise<Game>) => Promise<void> }) {
@@ -464,6 +811,7 @@ function ActionDrawer({ panel, initialActorId, game, credentials, busy, onClose,
   const [title, setTitle] = useState("");
   const [agenda, setAgenda] = useState("");
   const [participants, setParticipants] = useState<string[]>([]);
+  const [meetingDocuments, setMeetingDocuments] = useState<string[]>([]);
   const [locationId, setLocationId] = useState(game.action_catalog.locations[0]?.id ?? "beishan_park");
   const [notified, setNotified] = useState(true);
   const [date, setDate] = useState(nextDate(game.current_date));
@@ -472,22 +820,23 @@ function ActionDrawer({ panel, initialActorId, game, credentials, busy, onClose,
   const [sourceDocuments, setSourceDocuments] = useState<string[]>([]);
 
   const toggleParticipant = (id: string) => setParticipants((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const toggleMeetingDocument = (id: string) => setMeetingDocuments((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   const formTitle = panel === "talk" ? "找人谈话" : panel === "meeting" ? "召开会议" : panel === "field" ? "现场调研" : panel === "schedule" ? "预定日程" : "交办文稿";
 
   function submit() {
     if (panel === "talk") return onMutate(() => startConversation(game, credentials, actorId));
     if (panel === "field") return onMutate(() => startFieldVisit(game, credentials, locationId, notified));
-    if (panel === "meeting") return onMutate(() => startMeeting(game, credentials, { meeting_type: meetingType, discussion_mode: discussionMode, title: title || "专题研究会", agenda: agenda || "听取情况并研究下一步安排", participant_ids: participants.length ? participants : [actorId] }));
+    if (panel === "meeting") return onMutate(() => startMeeting(game, credentials, { meeting_type: meetingType, discussion_mode: discussionMode, title: title || "专题研究会", agenda: agenda || "听取情况并研究下一步安排", participant_ids: participants.length ? participants : [actorId], meeting_document_ids: meetingDocuments }));
     if (panel === "draft") return onMutate(() => requestDraft(game, credentials, { author_id: actorId, title: title || "情况报告", document_type: "report", instructions: instructions || "根据现有材料形成事实清楚、责任边界明确的报告。", source_document_ids: sourceDocuments }));
     const scheduleParticipants = scheduleKindValue === "conversation" || scheduleKindValue === "superior_meeting" ? [scheduleKindValue === "superior_meeting" ? "superior" : actorId] : participants.length ? participants : [actorId];
-    return onMutate(() => scheduleEntry(game, credentials, { date, kind: scheduleKindValue, title: title || "预定工作安排", participant_ids: scheduleKindValue === "field_visit" ? [] : scheduleParticipants, location_id: scheduleKindValue === "field_visit" ? locationId : undefined, meeting_type: scheduleKindValue === "meeting" ? meetingType : undefined, discussion_mode: scheduleKindValue === "meeting" ? discussionMode : undefined, notified }));
+    return onMutate(() => scheduleEntry(game, credentials, { date, kind: scheduleKindValue, title: title || "预定工作安排", participant_ids: scheduleKindValue === "field_visit" ? [] : scheduleParticipants, location_id: scheduleKindValue === "field_visit" ? locationId : undefined, meeting_type: scheduleKindValue === "meeting" ? meetingType : undefined, discussion_mode: scheduleKindValue === "meeting" ? discussionMode : undefined, meeting_document_ids: scheduleKindValue === "meeting" ? meetingDocuments : undefined, notified }));
   }
 
-  return <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="action-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title"><header><div><p className="section-kicker">工作安排</p><h2 id="drawer-title">{formTitle}</h2></div><button onClick={onClose} aria-label="关闭">×</button></header>{panel === "talk" && <><p className="drawer-help">一次谈话只消耗一次行动点，可连续追问。人物只会依据自己的身份、渠道和亲历作答。</p><ActorSelect actors={game.actors} value={actorId} onChange={setActorId} /></>}{panel === "meeting" && <MeetingFields game={game} meetingType={meetingType} mode={discussionMode} title={title} agenda={agenda} participants={participants} onMeetingType={setMeetingType} onMode={setDiscussionMode} onTitle={setTitle} onAgenda={setAgenda} onToggle={toggleParticipant} />}{panel === "field" && <FieldFields game={game} locationId={locationId} notified={notified} onLocation={setLocationId} onNotified={setNotified} />}{panel === "schedule" && <><label className="field-label" htmlFor="schedule-date">执行日期</label><input id="schedule-date" className="text-input" type="date" min={nextDate(game.current_date)} value={date} onChange={(event) => setDate(event.target.value)} /><label className="field-label" htmlFor="schedule-kind">事项类型</label><select id="schedule-kind" className="text-input" value={scheduleKindValue} onChange={(event) => setScheduleKindValue(event.target.value as ScheduleKind)}><option value="meeting">召开会议</option><option value="conversation">找人谈话</option><option value="field_visit">现场调研</option><option value="superior_meeting">与上级面谈</option></select><label className="field-label" htmlFor="schedule-title">日程名称</label><input id="schedule-title" className="text-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：研究北山产业整改" />{scheduleKindValue === "meeting" && <MeetingFields compact game={game} meetingType={meetingType} mode={discussionMode} title={title} agenda={agenda} participants={participants} onMeetingType={setMeetingType} onMode={setDiscussionMode} onTitle={setTitle} onAgenda={setAgenda} onToggle={toggleParticipant} />}{scheduleKindValue === "conversation" && <ActorSelect actors={game.actors.filter((actor) => actor.id !== "superior")} value={actorId} onChange={setActorId} />}{scheduleKindValue === "field_visit" && <FieldFields game={game} locationId={locationId} notified={notified} onLocation={setLocationId} onNotified={setNotified} />}</>}{panel === "draft" && <><p className="drawer-help">秘书或相关人员会在日终结算中处理任务，成稿通常于次日呈送。文稿的事实基础来自你选择的源文件。</p><ActorSelect actors={game.actors.filter((actor) => actor.id !== "superior")} value={actorId} onChange={setActorId} /><label className="field-label" htmlFor="draft-title">文稿标题</label><input id="draft-title" className="text-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="关于……的情况报告" /><label className="field-label" htmlFor="draft-instructions">起草要求</label><textarea id="draft-instructions" rows={4} value={instructions} onChange={(event) => setInstructions(event.target.value)} placeholder="说明用途、重点、口径和必须核实的事项。" /><div className="source-checks"><span>引用已有文件</span>{game.documents.map((document) => <label key={document.id}><input type="checkbox" checked={sourceDocuments.includes(document.id)} onChange={() => setSourceDocuments((current) => current.includes(document.id) ? current.filter((item) => item !== document.id) : [...current, document.id])} />{document.title}</label>)}</div></>}<footer><button className="ghost-button" onClick={onClose}>取消</button><button className="primary-button" disabled={busy || (panel === "meeting" && participants.length === 0)} onClick={() => void submit()}>{busy ? "正在处理…" : panel === "schedule" || panel === "draft" ? "确认交办" : "立即开始"}</button></footer></section></div>;
+  return <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="action-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title"><header><div><p className="section-kicker">工作安排</p><h2 id="drawer-title">{formTitle}</h2></div><button onClick={onClose} aria-label="关闭">×</button></header>{panel === "talk" && <><p className="drawer-help">一次谈话只消耗一次行动点，可连续追问。人物只会依据自己的身份、渠道和亲历作答。</p><ActorSelect actors={game.actors} value={actorId} onChange={setActorId} /></>}{panel === "meeting" && <MeetingFields game={game} meetingType={meetingType} mode={discussionMode} title={title} agenda={agenda} participants={participants} meetingDocuments={meetingDocuments} onMeetingType={setMeetingType} onMode={setDiscussionMode} onTitle={setTitle} onAgenda={setAgenda} onToggle={toggleParticipant} onToggleDocument={toggleMeetingDocument} />}{panel === "field" && <FieldFields game={game} locationId={locationId} notified={notified} onLocation={setLocationId} onNotified={setNotified} />}{panel === "schedule" && <><label className="field-label" htmlFor="schedule-date">执行日期</label><input id="schedule-date" className="text-input" type="date" min={nextDate(game.current_date)} value={date} onChange={(event) => setDate(event.target.value)} /><label className="field-label" htmlFor="schedule-kind">事项类型</label><select id="schedule-kind" className="text-input" value={scheduleKindValue} onChange={(event) => setScheduleKindValue(event.target.value as ScheduleKind)}><option value="meeting">召开会议</option><option value="conversation">找人谈话</option><option value="field_visit">现场调研</option><option value="superior_meeting">与上级面谈</option></select><label className="field-label" htmlFor="schedule-title">日程名称</label><input id="schedule-title" className="text-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：研究北山产业整改" />{scheduleKindValue === "meeting" && <MeetingFields compact game={game} meetingType={meetingType} mode={discussionMode} title={title} agenda={agenda} participants={participants} meetingDocuments={meetingDocuments} onMeetingType={setMeetingType} onMode={setDiscussionMode} onTitle={setTitle} onAgenda={setAgenda} onToggle={toggleParticipant} onToggleDocument={toggleMeetingDocument} />}{scheduleKindValue === "conversation" && <ActorSelect actors={game.actors.filter((actor) => actor.id !== "superior")} value={actorId} onChange={setActorId} />}{scheduleKindValue === "field_visit" && <FieldFields game={game} locationId={locationId} notified={notified} onLocation={setLocationId} onNotified={setNotified} />}</>}{panel === "draft" && <><p className="drawer-help">秘书或相关人员会在日终结算中处理任务，成稿通常于次日呈送。文稿的事实基础来自你选择的源文件。</p><ActorSelect actors={game.actors.filter((actor) => actor.id !== "superior")} value={actorId} onChange={setActorId} /><label className="field-label" htmlFor="draft-title">文稿标题</label><input id="draft-title" className="text-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="关于……的情况报告" /><label className="field-label" htmlFor="draft-instructions">起草要求</label><textarea id="draft-instructions" rows={4} value={instructions} onChange={(event) => setInstructions(event.target.value)} placeholder="说明用途、重点、口径和必须核实的事项。" /><div className="source-checks"><span>引用已有文件</span>{game.documents.map((document) => <label key={document.id}><input type="checkbox" checked={sourceDocuments.includes(document.id)} onChange={() => setSourceDocuments((current) => current.includes(document.id) ? current.filter((item) => item !== document.id) : [...current, document.id])} />{document.title}</label>)}</div></>}<footer><button className="ghost-button" onClick={onClose}>取消</button><button className="primary-button" disabled={busy || (panel === "meeting" && participants.length === 0)} onClick={() => void submit()}>{busy ? "正在处理…" : panel === "schedule" || panel === "draft" ? "确认交办" : "立即开始"}</button></footer></section></div>;
 }
 
-function MeetingFields({ game, meetingType, mode, title, agenda, participants, onMeetingType, onMode, onTitle, onAgenda, onToggle, compact = false }: { game: Game; meetingType: MeetingType; mode: DiscussionMode; title: string; agenda: string; participants: string[]; onMeetingType: (value: MeetingType) => void; onMode: (value: DiscussionMode) => void; onTitle: (value: string) => void; onAgenda: (value: string) => void; onToggle: (id: string) => void; compact?: boolean }) {
-  return <div className={compact ? "compact-fields" : ""}>{!compact && <><label className="field-label" htmlFor="meeting-title">会议名称</label><input id="meeting-title" className="text-input" value={title} onChange={(event) => onTitle(event.target.value)} placeholder="例如：北山产业整改专题会" /></>}<label className="field-label" htmlFor="meeting-type">会议类型</label><select id="meeting-type" className="text-input" value={meetingType} onChange={(event) => onMeetingType(event.target.value as MeetingType)}>{game.action_catalog.meeting_types.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><p className="field-note">{game.action_catalog.meeting_types.find((item) => item.id === meetingType)?.description}</p><label className="field-label" htmlFor="discussion-mode">讨论方式</label><select id="discussion-mode" className="text-input" value={mode} onChange={(event) => onMode(event.target.value as DiscussionMode)}><option value="chaired">有主持磋商 · 玩家点名</option><option value="free">无主持磋商 · 角色自主抢话</option></select><label className="field-label" htmlFor="meeting-agenda">议题与希望讨论的问题</label><textarea id="meeting-agenda" rows={3} value={agenda} onChange={(event) => onAgenda(event.target.value)} placeholder="说明要研究的问题，不必替执行单位写完整方案。" /><div className="participant-checks"><span>参会人员</span>{game.actors.filter((actor) => actor.id !== "superior").map((actor) => <label key={actor.id}><input type="checkbox" checked={participants.includes(actor.id)} onChange={() => onToggle(actor.id)} /><strong>{actor.name}</strong><small>{actor.title}</small></label>)}</div></div>;
+function MeetingFields({ game, meetingType, mode, title, agenda, participants, meetingDocuments, onMeetingType, onMode, onTitle, onAgenda, onToggle, onToggleDocument, compact = false }: { game: Game; meetingType: MeetingType; mode: DiscussionMode; title: string; agenda: string; participants: string[]; meetingDocuments: string[]; onMeetingType: (value: MeetingType) => void; onMode: (value: DiscussionMode) => void; onTitle: (value: string) => void; onAgenda: (value: string) => void; onToggle: (id: string) => void; onToggleDocument: (id: string) => void; compact?: boolean }) {
+  return <div className={compact ? "compact-fields" : ""}>{!compact && <><label className="field-label" htmlFor="meeting-title">会议名称</label><input id="meeting-title" className="text-input" value={title} onChange={(event) => onTitle(event.target.value)} placeholder="例如：北山产业整改专题会" /></>}<label className="field-label" htmlFor="meeting-type">会议类型</label><select id="meeting-type" className="text-input" value={meetingType} onChange={(event) => onMeetingType(event.target.value as MeetingType)}>{game.action_catalog.meeting_types.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><p className="field-note">{game.action_catalog.meeting_types.find((item) => item.id === meetingType)?.description}</p><label className="field-label" htmlFor="discussion-mode">讨论方式</label><select id="discussion-mode" className="text-input" value={mode} onChange={(event) => onMode(event.target.value as DiscussionMode)}><option value="chaired">有主持磋商 · 玩家点名</option><option value="free">无主持磋商 · 角色自主抢话</option></select><label className="field-label" htmlFor="meeting-agenda">议题与希望讨论的问题</label><textarea id="meeting-agenda" rows={3} value={agenda} onChange={(event) => onAgenda(event.target.value)} placeholder="说明要研究的问题，不必替执行单位写完整方案。" /><div className="participant-checks"><span>参会人员</span>{game.actors.filter((actor) => actor.id !== "superior").map((actor) => <label key={actor.id}><input type="checkbox" checked={participants.includes(actor.id)} onChange={() => onToggle(actor.id)} /><strong>{actor.name}</strong><small>{actor.title}</small></label>)}</div><div className="source-checks meeting-document-checks"><span>会前材料 · 将向全体与会者发放</span>{game.documents.map((document) => <label key={`${document.id}-${document.version}`}><input type="checkbox" checked={meetingDocuments.includes(document.id)} onChange={() => onToggleDocument(document.id)} /><strong>{document.title}</strong><small>第 {document.version} 版 · {document.confidentiality}</small></label>)}</div></div>;
 }
 
 function FieldFields({ game, locationId, notified, onLocation, onNotified }: { game: Game; locationId: string; notified: boolean; onLocation: (value: string) => void; onNotified: (value: boolean) => void }) {
@@ -573,3 +922,4 @@ function documentStatus(value: string) { return ({ draft: "草稿", in_review: "
 function calendarStatus(value: string) { return ({ scheduled: "已预定", tentative: "暂定", due: "今日待办", active: "进行中", completed: "已完成", canceled: "已取消", conflict: "有冲突" } as Record<string, string>)[value] ?? value; }
 function scheduleKind(value: string) { return ({ conversation: "谈话", meeting: "会议", superior_meeting: "上级面谈", field_visit: "调研" } as Record<string, string>)[value] ?? value; }
 function sceneKind(value: string) { return ({ conversation: "个别谈话", meeting: "会议", superior_meeting: "向上汇报", field_visit: "现场调研" } as Record<string, string>)[value] ?? value; }
+function debugTraceStatus(value: AgentDebugTrace["status"]) { return ({ running: "运行中", completed: "已完成", fallback: "已降级", failed: "失败", canceled: "已中断" } as Record<AgentDebugTrace["status"], string>)[value]; }
