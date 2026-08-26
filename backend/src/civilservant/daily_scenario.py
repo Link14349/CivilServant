@@ -17,6 +17,240 @@ METRIC_DEFINITIONS = [
 ]
 
 
+PUBLIC_REFERENCE_MATERIALS: List[Dict[str, Any]] = [
+    {
+        "id": "ref-city-geography",
+        "category": "市情总览",
+        "title": "岚州市自然地理与空间格局",
+        "subtitle": "区位、地貌、水系与气候",
+        "updated_date": "2025-12",
+        "summary": "岚州位于虚构的澄江省中西部，山地丘陵与河谷盆地相间，汛期降雨集中。",
+        "sections": [
+            {
+                "heading": "区位与面积",
+                "body": "全市国土面积约一万二千六百四十平方公里，东接省会经济圈，西部进入丘陵山地，南北之间依靠河谷和两条铁路通道联系。",
+            },
+            {
+                "heading": "地貌与土地",
+                "body": "低山约占四成、丘陵约占三成五、河谷平坝约占四分之一。建设用地主要集中在南川、临江两个城区和北山产业走廊，西部生态保护空间较多。",
+            },
+            {
+                "heading": "水系与气候",
+                "body": "南川河自西北向东南穿城汇入澄江，北部支流坡陡流急。多年平均降水量约九百一十毫米，约六成五集中在五月至九月，短时强降雨容易造成山洪、城区内涝和中小河流险情。",
+            },
+        ],
+        "source_note": "虚构资料，综合岚州市国土空间规划、水资源公报和气象常年值形成。",
+    },
+    {
+        "id": "ref-city-society",
+        "category": "市情总览",
+        "title": "人口、就业与公共服务",
+        "subtitle": "人口结构、劳动力与基本公共资源",
+        "updated_date": "2025-12",
+        "summary": "全市常住人口约三百七十八万，人口外流、县域老龄化和产业就业集中并存。",
+        "sections": [
+            {
+                "heading": "人口结构",
+                "body": "常住人口约三百七十八万，户籍人口约四百一十六万，常住人口城镇化率约百分之五十八点四。六十岁及以上人口约占百分之二十一，青壮年净流出主要发生在青源、和州等县。",
+            },
+            {
+                "heading": "就业结构",
+                "body": "城镇就业主要集中在制造业、建筑业、商贸物流和公共服务；县域仍有较多农业人口。能源化工及上下游就业具有地区集中性，单一企业或园区波动可能迅速传导到劳务、运输和家庭收入。",
+            },
+            {
+                "heading": "教育医疗",
+                "body": "全市有一所本科院校、两所高职院校和三家三级医院，优质高中与专科医疗主要集中在两个城区。山区乡镇的师资、急救半径和养老照护能力相对薄弱。",
+            },
+        ],
+        "source_note": "虚构资料，采用统计公报和公共服务资源名录的公开口径。",
+    },
+    {
+        "id": "ref-city-economy",
+        "category": "市情总览",
+        "title": "经济结构与财政基本盘",
+        "subtitle": "产业、投资、财政与国有经济",
+        "updated_date": "2025-12",
+        "summary": "岚州经济总量约二千一百四十八亿元，工业比重较高，财政支出依赖转移支付且县区分化明显。",
+        "sections": [
+            {
+                "heading": "经济总量",
+                "body": "二〇二五年地区生产总值约二千一百四十八亿元，三次产业结构约为十三点八、四十二点六和四十三点六。支柱行业包括能源化工、装备制造、农产品加工和商贸物流。",
+            },
+            {
+                "heading": "财政收支",
+                "body": "全市一般公共预算收入约一百五十六亿元，一般公共预算支出约四百二十七亿元。县区基本民生和基层运转较依赖上级转移支付，土地相关收入下降后，新增项目和产业支持空间收窄。",
+            },
+            {
+                "heading": "发展约束",
+                "body": "传统产业设备更新、污染治理和安全改造需求集中；本地民营企业融资抵押物不足，市属国企承担基础设施和政策性任务较多。公开规划把先进装备、绿色化工和现代农业列为转型方向，但项目成熟度不一。",
+            },
+        ],
+        "source_note": "虚构资料，金额为上一完整统计年度公开口径，不等同于当前可支配资金。",
+    },
+    {
+        "id": "ref-city-infrastructure",
+        "category": "市情总览",
+        "title": "交通、能源与防灾基础",
+        "subtitle": "城市运行所依赖的公共设施",
+        "updated_date": "2025-12",
+        "summary": "岚州对外通道基本成形，但县域路网、水利设施和老城区管网仍有明显短板。",
+        "sections": [
+            {
+                "heading": "综合交通",
+                "body": "两条干线铁路、三条高速公路和一座区域货运编组站构成主要对外通道。北山工业品运输对一条南北货运走廊依赖较高，山区普通国省道在汛期容易受边坡风险影响。",
+            },
+            {
+                "heading": "能源与市政",
+                "body": "全市电力供应以省网和本地火电联供为主，工业蒸汽管网集中在北山、临江园区。两个城区供水总体有保障，但部分老旧片区雨污分流和排涝能力不足。",
+            },
+            {
+                "heading": "防灾体系",
+                "body": "市级建有综合应急指挥平台，各县区分别储备防汛、消防和救灾物资。公开预案明确属地先期处置、行业部门专业支撑和市级统筹调度，但跨部门演练与物资台账仍需定期核验。",
+            },
+        ],
+        "source_note": "虚构资料，综合交通规划、城市建设公报和综合防灾规划形成。",
+    },
+    {
+        "id": "ref-nanchuan",
+        "category": "县区概况",
+        "title": "南川区基本情况",
+        "subtitle": "中心城区、河谷商贸与装备制造",
+        "updated_date": "2025-12",
+        "summary": "南川区常住人口约七十六万，是市委、市政府驻地，也是南川河穿城段防汛和老城更新的重点区域。",
+        "sections": [
+            {
+                "heading": "人口与空间",
+                "body": "辖十二个街道、四个乡镇，常住人口约七十六万。人口和公共服务高度集中于河谷主城区，西北部仍有丘陵乡镇。",
+            },
+            {
+                "heading": "经济与财政",
+                "body": "地区生产总值约五百零二亿元，一般公共预算收入约四十三亿元。商贸服务、总部经济、装备制造和城市建设是主要支撑，区级支出同时承担较多中心城区公共服务。",
+            },
+            {
+                "heading": "公开关注点",
+                "body": "南川河穿城段、老旧小区排涝、城中村改造和教育医疗承载压力长期受到关注。公开材料将防汛标准提升列入近年重点项目。",
+            },
+        ],
+        "source_note": "虚构县区公开概况，不包含内部排查、未报送台账或个人判断。",
+    },
+    {
+        "id": "ref-linjiang",
+        "category": "县区概况",
+        "title": "临江区基本情况",
+        "subtitle": "老工业城区、港站物流与城市更新",
+        "updated_date": "2025-12",
+        "summary": "临江区常住人口约六十二万，老工业片区和区域物流枢纽并存，转型与更新任务较重。",
+        "sections": [
+            {
+                "heading": "人口与空间",
+                "body": "辖九个街道、五个乡镇，常住人口约六十二万。城区沿铁路和澄江支流展开，老厂区、铁路生活区和新物流片区交错。",
+            },
+            {
+                "heading": "经济与财政",
+                "body": "地区生产总值约四百八十六亿元，一般公共预算收入约三十六亿元。装备制造、基础化工、仓储物流和生产性服务业占比较高。",
+            },
+            {
+                "heading": "公开关注点",
+                "body": "老工业用地再开发、土壤治理、国企退休人员服务和老旧管网改造是持续议题，物流园扩建也带来交通组织压力。",
+            },
+        ],
+        "source_note": "虚构县区公开概况，不包含尚未公开的项目谈判和企业经营信息。",
+    },
+    {
+        "id": "ref-beishan",
+        "category": "县区概况",
+        "title": "北山县基本情况",
+        "subtitle": "资源型县域、焦化产业与丘陵农业",
+        "updated_date": "2025-12",
+        "summary": "北山县常住人口约七十一万，焦化及上下游是财政与就业的重要支柱，产业集中度较高。",
+        "sections": [
+            {
+                "heading": "人口与空间",
+                "body": "辖三个街道、十四个乡镇，常住人口约七十一万。县城和北山产业园吸纳主要非农就业，外围丘陵乡镇以粮油、养殖和外出务工为主。",
+            },
+            {
+                "heading": "经济与财政",
+                "body": "地区生产总值约四百二十三亿元，一般公共预算收入约二十八亿元、支出约七十一亿元。焦化、煤化工配套和运输服务占工业比重较高，县级财力容易受企业利润和环保限产影响。",
+            },
+            {
+                "heading": "公开关注点",
+                "body": "产业绿色改造、园区空气质量、劳务用工和资源型地区转型是公开政策重点。县里已多次提出争取省市技改、稳岗和园区基础设施支持。",
+            },
+        ],
+        "source_note": "虚构县区公开概况；具体就业名单、欠付奖补和企业现金流不属于本材料。",
+    },
+    {
+        "id": "ref-dongning",
+        "category": "县区概况",
+        "title": "东宁市基本情况",
+        "subtitle": "县级市、平原农业与加工制造",
+        "updated_date": "2025-12",
+        "summary": "东宁市常住人口约六十六万，是岚州东部交通节点和商品粮、食品加工基地。",
+        "sections": [
+            {
+                "heading": "人口与空间",
+                "body": "辖五个街道、十三个乡镇，常住人口约六十六万。地势较平缓，城镇和规模农业沿铁路、高速公路分布。",
+            },
+            {
+                "heading": "经济与财政",
+                "body": "地区生产总值约三百六十八亿元，一般公共预算收入约二十三亿元。农产品加工、轻型装备、纺织和县域商贸较为活跃。",
+            },
+            {
+                "heading": "公开关注点",
+                "body": "粮食产能、高标准农田、食品加工园扩能和中小企业融资是重点，部分乡镇还面临地下水利用和农业面源污染压力。",
+            },
+        ],
+        "source_note": "虚构县区公开概况，不包含企业个别授信和项目评审意见。",
+    },
+    {
+        "id": "ref-qingyuan",
+        "category": "县区概况",
+        "title": "青源县基本情况",
+        "subtitle": "西部山区、生态农业与水源涵养",
+        "updated_date": "2025-12",
+        "summary": "青源县常住人口约五十五万，生态保护面积大，县域发展依赖特色农业、文旅和转移支付。",
+        "sections": [
+            {
+                "heading": "人口与空间",
+                "body": "辖两个街道、十五个乡镇，常住人口约五十五万。村庄分散、山地交通半径较长，人口老龄化和劳动力外流较明显。",
+            },
+            {
+                "heading": "经济与财政",
+                "body": "地区生产总值约二百一十五亿元，一般公共预算收入约十二亿元。茶叶、中药材、林产品和生态旅游是主要特色，县级基本公共服务较依赖转移支付。",
+            },
+            {
+                "heading": "公开关注点",
+                "body": "水源涵养、地质灾害、农村道路和乡镇医疗教育是长期任务。发展项目需要同时满足生态保护和群众增收要求。",
+            },
+        ],
+        "source_note": "虚构县区公开概况，不包含生态项目审批中的内部意见。",
+    },
+    {
+        "id": "ref-hezhou",
+        "category": "县区概况",
+        "title": "和州县基本情况",
+        "subtitle": "南部农业县、劳务输出与基础民生",
+        "updated_date": "2025-12",
+        "summary": "和州县常住人口约四十八万，经济体量较小，农业、劳务输出和基础民生保障占据较大政策权重。",
+        "sections": [
+            {
+                "heading": "人口与空间",
+                "body": "辖一个街道、十二个乡镇，常住人口约四十八万。南部平坝是粮食和畜牧主产区，边缘乡镇交通与公共服务可达性较弱。",
+            },
+            {
+                "heading": "经济与财政",
+                "body": "地区生产总值约一百五十四亿元，一般公共预算收入约九亿元。粮油、畜牧、服装加工和劳务经济是主要支撑，县级财政以保基本民生和基层运转为先。",
+            },
+            {
+                "heading": "公开关注点",
+                "body": "乡村学校布局、县域医疗、农田水利和返乡就业是主要议题。人口老龄化使养老服务和基层照护需求持续上升。",
+            },
+        ],
+        "source_note": "虚构县区公开概况，不包含具体补助分配和未公开项目储备。",
+    },
+]
+
+
 ACTORS: Dict[str, Dict[str, Any]] = {
     "mayor": {
         "name": "周立衡",
@@ -153,6 +387,26 @@ ACTORS: Dict[str, Dict[str, Any]] = {
             {"id": "county_subsidy_arrears", "content": "北山县尚欠企业以前年度奖补约六千八百万元。", "source": "县财政支付台账"},
         ],
     },
+    "nanchuan_secretary": {
+        "name": "杜行舟",
+        "title": "南川区委书记",
+        "public_position": "主张尽快复核南川河险段，但希望市级明确工程和物资支持边界。",
+        "known_note": "掌握南川区防汛组织和属地工程情况，近期材料与现场照片存在差异。",
+        "work_style": "熟悉基层工程，汇报谨慎，会区分已经验收、当前可用和仍需复核的状态。",
+        "private_goal": "在汛期前补齐真实短板，同时避免把历史验收问题和全部资金责任压给南川区。",
+        "beliefs": [
+            {
+                "id": "nanchuan_acceptance_gap",
+                "content": "区里所称的“已完成修复”沿用了去年项目验收结论，尚未覆盖今年发现的冲刷点。",
+                "source": "南川区汛前内部复查记录",
+            },
+            {
+                "id": "nanchuan_material_shortage",
+                "content": "属地现有可立即调用的合格沙袋和照明设备低于报表数，补充采购尚未到货。",
+                "source": "区防指物资抽查台账",
+            },
+        ],
+    },
     "environment_director": {
         "name": "许仲平",
         "title": "市生态环境局局长",
@@ -199,6 +453,312 @@ ACTORS: Dict[str, Dict[str, Any]] = {
         ],
     },
 }
+
+
+ACTORS.update(
+    {
+        "linjiang_secretary": {
+            "name": "贾闻澜",
+            "title": "临江区委书记",
+            "public_position": "主张把老工业区更新与产业承接统筹推进，反对只拆不建。",
+            "known_note": "熟悉老工业片区、国企社区和物流园，协调城市更新经验较多。",
+            "work_style": "善于跨部门协调，公开表达稳健，涉及土地和国企历史问题时格外谨慎。",
+            "private_goal": "争取市级支持完成片区转型，同时避免历史环境成本全部由区级财政承担。",
+            "beliefs": [
+                {
+                    "id": "linjiang_brownfield_cost",
+                    "content": "临江老厂区首期土壤治理的内部测算比公开项目估算高约三成，尚未落实完整资金来源。",
+                    "source": "临江区城市更新专班底稿",
+                }
+            ],
+        },
+        "dongning_secretary": {
+            "name": "李衍初",
+            "title": "东宁市委书记",
+            "public_position": "希望以农产品加工和交通区位扩大县域就业，强调项目要尽快落地。",
+            "known_note": "掌握东部平原农业、食品加工园和县域中小企业情况。",
+            "work_style": "目标感强、重项目进度，愿意竞争资源，但会维护县级市的自主安排。",
+            "private_goal": "把食品加工园列入市级重点盘子，并证明东宁不只是传统农业县域。",
+            "beliefs": [
+                {
+                    "id": "dongning_processing_gap",
+                    "content": "食品加工园二期已有企业意向，但污水处理扩容和冷链用地尚未完成要素闭合。",
+                    "source": "东宁市项目调度会内部清单",
+                }
+            ],
+        },
+        "qingyuan_secretary": {
+            "name": "石静川",
+            "title": "青源县委书记",
+            "public_position": "坚持生态底线，也要求生态保护成本在市级项目和转移支付中得到体现。",
+            "known_note": "熟悉山区乡镇、生态农业和水源保护，基层公共服务压力较大。",
+            "work_style": "说话平缓但守边界，习惯把生态、民生和财力约束放在一起谈。",
+            "private_goal": "守住生态考核和基层运转，避免县里承担保护责任却持续失去人口和产业。",
+            "beliefs": [
+                {
+                    "id": "qingyuan_road_risk",
+                    "content": "两条山区公路在近期巡查中发现边坡变形，但县级养护资金只能先覆盖其中一处。",
+                    "source": "青源县交通与地灾联合巡查记录",
+                }
+            ],
+        },
+        "hezhou_secretary": {
+            "name": "宋知衡",
+            "title": "和州县委书记",
+            "public_position": "主张把有限资金优先用于基层民生、农田水利和返乡就业。",
+            "known_note": "长期在农业县工作，对乡镇运转、教育医疗和劳务输出较熟悉。",
+            "work_style": "务实低调，不热衷大项目，面对资源竞争会反复强调基本民生底线。",
+            "private_goal": "确保县级财政不断链，并让市里看见人口小县承担的基本公共服务成本。",
+            "beliefs": [
+                {
+                    "id": "hezhou_school_transport",
+                    "content": "和州拟撤并的三所乡村学校涉及较长通学距离，现有校车和寄宿条件不足以直接承接。",
+                    "source": "和州县教育布局内部评估",
+                }
+            ],
+        },
+        "finance_director": {
+            "name": "叶秋实",
+            "title": "市财政局局长",
+            "public_position": "新增政策先算财力、期限和退出机制，不能把意向写成财政兜底。",
+            "known_note": "掌握预算、转移支付、政府债务和市县财政运行，是资金边界的直接信息源。",
+            "work_style": "谨慎精确，习惯区分预算安排、资金测算、债务责任和支付进度。",
+            "private_goal": "保住基本民生和财政运行底线，同时避免财政局替未经决策的方案背书。",
+            "beliefs": [
+                {
+                    "id": "finance_competing_requests",
+                    "content": "各部门近期新增支出诉求合计约十三点八亿元，而年内可重新统筹的市级财力初测约六点二亿元。",
+                    "source": "财政局滚动平衡测算",
+                }
+            ],
+        },
+        "development_reform_director": {
+            "name": "俞敬川",
+            "title": "市发展和改革委员会主任",
+            "public_position": "重大项目应先做必要性、要素和资金闭合，再决定进入哪一层项目盘子。",
+            "known_note": "掌握全市规划、重大项目、投资审批和经济运行调度。",
+            "work_style": "擅长把政治目标转成项目条件，面对不成熟项目会留下明确前置项。",
+            "private_goal": "提升项目成熟度和争取上级资金的命中率，避免项目清单只增不减。",
+            "beliefs": [
+                {
+                    "id": "development_project_maturity",
+                    "content": "当前拟争取省级支持的八个重点项目中，有三个尚未同时落实用地、资本金和运营主体。",
+                    "source": "市发改委重大项目要素清单",
+                }
+            ],
+        },
+        "industry_bureau_director": {
+            "name": "郑其峰",
+            "title": "市工业和信息化局局长",
+            "public_position": "产业整改要分生产线、企业和时间窗口，不能把全行业写成一个结论。",
+            "known_note": "掌握工业运行、技改项目、重点企业调度和产业链就业估算。",
+            "work_style": "数据密集、重连续生产，倾向用分阶段技术方案减少停产冲击。",
+            "private_goal": "维持工业基本盘并推动真实技改，避免工信系统继续为企业未兑现承诺背书。",
+            "beliefs": [
+                {
+                    "id": "industry_employment_estimate",
+                    "content": "按重点企业、劳务派遣和稳定上下游三类口径合并，工信局内部估计北山直接相关就业约九千八百人。",
+                    "source": "市工信局企业运行调度表",
+                }
+            ],
+        },
+        "human_resources_director": {
+            "name": "冯雅萍",
+            "title": "市人力资源和社会保障局局长",
+            "public_position": "稳岗和安置必须以可核验人员为基础，同时不能遗漏派遣工和实际就业人员。",
+            "known_note": "掌握就业、社保、劳动关系和职业培训渠道，可组织人员名单核验。",
+            "work_style": "重视个体权益和名单证据，会区分劳动合同、社保记录与实际用工。",
+            "private_goal": "让稳岗政策覆盖真实受影响者，并防止模糊名单造成资金错配和劳动争议。",
+            "beliefs": [
+                {
+                    "id": "human_resources_roster_gap",
+                    "content": "跨库比对发现约一千九百名劳务派遣和承包用工没有进入北山县正式稳岗名单。",
+                    "source": "市人社局就业与社保数据比对",
+                }
+            ],
+        },
+        "water_director": {
+            "name": "陆汝成",
+            "title": "市水利局局长",
+            "public_position": "防汛风险等级必须以复核和工程现状为准，不能沿用过期验收结论。",
+            "known_note": "掌握河道、水库、水利工程和防汛技术资料，是险段专业责任部门。",
+            "work_style": "专业保守，重设计标准、现场复核和上下游联动，避免口头判断替代技术结论。",
+            "private_goal": "尽快消除关键险段的不确定性，并明确工程维护、属地巡查和市级调度责任。",
+            "beliefs": [
+                {
+                    "id": "water_design_gap",
+                    "content": "南川河争议险段现有临时加固只按常遇洪水工况施工，没有覆盖最新复核提出的冲刷深度。",
+                    "source": "市水利局技术复核底稿",
+                }
+            ],
+        },
+        "emergency_director": {
+            "name": "邓闻达",
+            "title": "市应急管理局局长",
+            "public_position": "预案、队伍和物资要在同一场景下验证，台账数量不等于现场可调用能力。",
+            "known_note": "掌握综合应急协调、危险化学品安全和跨部门救援资源。",
+            "work_style": "强调最坏情形和响应链，会追问物资在哪里、谁能调、多久能到。",
+            "private_goal": "补齐跨部门联动短板，但避免应急部门替行业主管部门承担全部日常治理责任。",
+            "beliefs": [
+                {
+                    "id": "emergency_stock_transfer",
+                    "content": "市级账面防汛物资中约三成存放在北部仓库，若南川河突发险情，夜间转运至少需要四小时。",
+                    "source": "市应急局物资调运推演",
+                }
+            ],
+        },
+        "state_assets_director": {
+            "name": "范景泰",
+            "title": "市国有资产监督管理委员会主任",
+            "public_position": "市属国企可以承担符合主业和程序的任务，但不能被当作无成本财政工具。",
+            "known_note": "掌握市属国企资产、负债、主业和投资决策边界。",
+            "work_style": "重资产穿透和董事会程序，愿意研究方案，但反对口头指定交易。",
+            "private_goal": "维护国有资本安全和企业持续经营，同时争取在城市转型中发挥作用。",
+            "beliefs": [
+                {
+                    "id": "state_assets_capacity",
+                    "content": "具备产业投资经验的两家市属企业中，只有一家尚有一定融资空间，但其现金流已承担在建基础设施项目。",
+                    "source": "市国资委月度财务监测",
+                }
+            ],
+        },
+        "audit_director": {
+            "name": "段谨言",
+            "title": "市审计局局长",
+            "public_position": "重大资金安排应当留有依据、绩效目标和完整流向，历史问题也不能靠新项目覆盖。",
+            "known_note": "掌握财政资金、国企和政府投资审计方法，但不替纪检监察机关作定性。",
+            "work_style": "按证据说话，区分管理不规范、绩效不足和需要移送的线索。",
+            "private_goal": "让高风险方案在实施前暴露控制缺口，避免事后只能追溯无法挽回的损失。",
+            "beliefs": [
+                {
+                    "id": "audit_unsettled_funds",
+                    "content": "北山产业园以前年度有两千二百万元专项资金长期挂在往来科目，尚未完成项目和资产对应核销。",
+                    "source": "市审计局审前数据分析",
+                }
+            ],
+        },
+        "natural_resources_director": {
+            "name": "方同甫",
+            "title": "市自然资源和规划局局长",
+            "public_position": "项目用地、规划用途和存量资产必须对应，不能以规划意向替代合法手续。",
+            "known_note": "掌握土地、规划、矿产、地灾和不动产登记信息。",
+            "work_style": "程序边界清楚，善于发现同一资产在规划、抵押和项目方案中的不同口径。",
+            "private_goal": "盘活存量用地但守住规划和资产真实性，避免部门被迫为既定交易补手续。",
+            "beliefs": [
+                {
+                    "id": "natural_resources_mortgage_overlap",
+                    "content": "北岭能源拟注入重组方案的两宗核心工业用地已有抵押登记，且其中一宗涉及用途调整。",
+                    "source": "不动产登记与项目用地核对记录",
+                }
+            ],
+        },
+        "housing_director": {
+            "name": "徐曼宁",
+            "title": "市住房和城乡建设局局长",
+            "public_position": "城市更新要先补安全和市政短板，再平衡开发强度与资金回收。",
+            "known_note": "掌握住房、城市建设、燃气和排水管网项目。",
+            "work_style": "重现场条件和工程时序，对只有概念图、没有运维安排的项目保持警惕。",
+            "private_goal": "优先处理安全和排涝短板，同时避免城市更新形成新的停工和隐性债务风险。",
+            "beliefs": [
+                {
+                    "id": "housing_drainage_gap",
+                    "content": "南川、临江共有二十三个老旧小区在强降雨条件下可能出现排水倒灌，其中九个尚未纳入已落实资金的改造计划。",
+                    "source": "市住建局排水防涝排查台账",
+                }
+            ],
+        },
+        "transport_director": {
+            "name": "季航",
+            "title": "市交通运输局局长",
+            "public_position": "产业运输和山区保通要统筹施工窗口，不能让多个项目同时切断替代通道。",
+            "known_note": "掌握干线公路、客货运输和交通建设养护安排。",
+            "work_style": "调度意识强，重时段、绕行能力和运输成本，倾向先做可执行排程。",
+            "private_goal": "保证工业和民生运输基本畅通，同时争取补足长期欠账的养护资金。",
+            "beliefs": [
+                {
+                    "id": "transport_corridor_overlap",
+                    "content": "北山货运走廊两座桥梁的维修窗口与汛期和园区设备运输计划重叠，现有绕行线路难以承受全部重载车辆。",
+                    "source": "市交通运输局施工组织内部评估",
+                }
+            ],
+        },
+        "agriculture_director": {
+            "name": "罗青禾",
+            "title": "市农业农村局局长",
+            "public_position": "产业和防灾安排都要看到县域农业、农民收入和村级执行成本。",
+            "known_note": "掌握粮食生产、乡村产业、农田建设和农业防灾情况。",
+            "work_style": "重基层样本和季节窗口，会提醒城市部门不要把农村影响写成附带事项。",
+            "private_goal": "守住粮食和农民收入底线，并让农业项目不再长期为工业项目让位。",
+            "beliefs": [
+                {
+                    "id": "agriculture_flood_exposure",
+                    "content": "南川河下游约四点二万亩农田依赖三处排涝站，其中一处主泵检修尚未完成。",
+                    "source": "市农业农村局春季生产调度",
+                }
+            ],
+        },
+        "health_director": {
+            "name": "王执中",
+            "title": "市卫生健康委员会主任",
+            "public_position": "医疗资源配置要同时考虑城区承载、县域急救和公共卫生韧性。",
+            "known_note": "掌握全市医疗机构、疾控、急救和基层卫生资源。",
+            "work_style": "风险意识强，重专业能力和服务半径，不愿用床位总数掩盖结构短板。",
+            "private_goal": "提升县域急救和基层服务能力，同时控制公立医院运行风险。",
+            "beliefs": [
+                {
+                    "id": "health_hospital_arrears",
+                    "content": "三家县级公立医院的药品耗材应付款持续上升，其中一家现金保障只能维持约两个月。",
+                    "source": "市卫健委公立医院运行监测",
+                }
+            ],
+        },
+        "education_director": {
+            "name": "薛含章",
+            "title": "市教育局局长",
+            "public_position": "学校布局应跟随真实人口变化，城区扩容与乡村教育底线都不能只靠短期调剂。",
+            "known_note": "掌握基础教育学位、教师队伍和职业教育资源。",
+            "work_style": "重长期人口趋势和公平，面对临时性指标任务时会要求说明持续成本。",
+            "private_goal": "缓解城区学位压力并稳定薄弱地区教师队伍，避免校舍项目挤占长期师资投入。",
+            "beliefs": [
+                {
+                    "id": "education_capacity_gap",
+                    "content": "南川区未来两年小学净增学位需求约四千个，但已落实建设计划只能提供约二千六百个。",
+                    "source": "市教育局学龄人口滚动测算",
+                }
+            ],
+        },
+        "petitions_director": {
+            "name": "孔亦秋",
+            "title": "市信访局局长",
+            "public_position": "重复诉求要区分合理诉求、程序堵点和历史积案，不能只以是否进京赴省衡量风险。",
+            "known_note": "掌握跨部门信访事项、重复访和基层矛盾流转情况。",
+            "work_style": "耐心细致，重问题来源和责任单位，反对用临时稳控替代实体解决。",
+            "private_goal": "推动一批长期积案真正解决，同时避免信访部门成为所有部门拖延后的最后兜底者。",
+            "beliefs": [
+                {
+                    "id": "petitions_repeated_cases",
+                    "content": "近期十七件重复来访中，有六件与北山劳务工资或历史奖补有关，责任单位的答复口径并不一致。",
+                    "source": "市信访局重复事项分析",
+                }
+            ],
+        },
+        "public_security_director": {
+            "name": "赵启原",
+            "title": "副市长、市公安局局长",
+            "public_position": "依法维护秩序必须建立在风险研判和实质化解基础上，不能把一般劳动诉求先行定性。",
+            "known_note": "掌握治安、交通和重大活动安全信息，与政法委共同关注社会风险。",
+            "work_style": "重预案和证据，行动果断，但会明确公安处置不能替代行业部门解决欠薪和合同问题。",
+            "private_goal": "防止矛盾升级为公共安全事件，同时保持执法边界和警力可持续。",
+            "beliefs": [
+                {
+                    "id": "public_security_contractors",
+                    "content": "北山园区两家承包商近期咨询集体讨薪报备事宜，但目前没有发现暴力或跨区域组织迹象。",
+                    "source": "市公安局基层警情与走访汇总",
+                }
+            ],
+        },
+    }
+)
 
 
 STANDING_COMMITTEE_MEMBER_IDS = [
@@ -331,7 +891,7 @@ INITIAL_DOCUMENTS = [
         "id": "doc-fiscal-note",
         "title": "市级财政承受能力提示",
         "document_type": "briefing",
-        "author_id": "mayor",
+        "author_id": "finance_director",
         "status": "received",
         "confidentiality": "内部",
         "summary": "现有预算无法覆盖大规模补贴或兜底融资。",
@@ -344,7 +904,7 @@ INITIAL_DOCUMENTS = [
         "id": "doc-flood",
         "title": "汛前风险排查汇总",
         "document_type": "report",
-        "author_id": "secretary_general",
+        "author_id": "water_director",
         "status": "received",
         "confidentiality": "内部",
         "summary": "两个县区对南川河险段的风险等级和物资数量填报不一致。",
@@ -382,11 +942,85 @@ TEMPLATE_UTTERANCES = {
     "united_front_minister": "企业担心整改被理解为强制整合。最好让企业说明资产和自救条件，再判断其可信度。",
     "garrison_commissar": "专业方案由主管同志说明。我只提醒一点：需要集体决定的事项应充分讨论，不能用临时口头意见代替。",
     "county_secretary": "县里执行市委决定，但就业和财政压力必须一并考虑。不能要求县里先把全部风险摊开，却不给任何支持路径。",
+    "nanchuan_secretary": "南川区会先复核险段和物资，但请把去年验收结论、今年新发现的问题和新增资金责任分开记录，不能用一句‘已经修复’概括。",
     "environment_director": "二号线检修是一个真实窗口。只要尽快固定停产范围和监测节点，可以降低后续整改成本。",
     "chairman": "企业愿意整改，但如果政策信号是强制并购，订单和技术团队都不可能原地等待。",
     "banker": "分行可以继续评估，前提是资产穿透和现金流真实。政策信号不能替代省行审批。",
     "superior": "我关心的不是材料写得多完整，而是岚州是否掌握真实情况、形成责任清楚且能执行的安排。",
 }
+
+
+TEMPLATE_UTTERANCES.update(
+    {
+        "linjiang_secretary": "临江愿意承担老工业区更新任务，但污染治理、土地处置和社区安置必须放在同一张责任表上，不能只给开发时点。",
+        "dongning_secretary": "东宁的项目有市场和就业基础，但污水、冷链和用地条件还要闭合。市里若列为重点，请同步明确前置条件。",
+        "qingyuan_secretary": "青源会守住生态底线，但保护成本和基层服务不能长期只由县里消化。项目取舍应把转移支付和群众增收一并考虑。",
+        "hezhou_secretary": "和州最关心的是基本民生和乡镇执行能力。大项目可以竞争，但不能因此挤掉农田水利、学校和县域医疗的刚性支出。",
+        "finance_director": "财政可以测算不同方案，但必须区分可统筹财力、专项资金和需要后续年度承担的责任，不能先承诺再找账。",
+        "development_reform_director": "建议先把项目必要性、要素保障和资金闭合列清。进入项目清单不等于取得审批或资金。",
+        "industry_bureau_director": "产业整改要落到生产线、技改节点和企业责任。就业影响也应分别核对直接用工、派遣用工和稳定上下游。",
+        "human_resources_director": "稳岗和安置首先要有可核验名单。劳动合同、社保记录和实际用工不完全重合，不能只采用最窄口径。",
+        "water_director": "水利技术结论要以当前工程状态和复核标准为准。去年的验收可以作为资料，但不能替代今年的险情判断。",
+        "emergency_director": "应急准备不能只看台账总量，还要看存放地点、调运时间、专业队伍和夜间响应链是否真的可用。",
+        "state_assets_director": "市属国企可以研究参与，但必须符合主业、资产评估和投资程序。政策任务不能被写成没有成本的企业自愿行为。",
+        "audit_director": "建议在方案形成时同步明确资金依据、绩效目标和流向记录。审计可以提示风险，但不会在证据不足时替其他机关定性。",
+        "natural_resources_director": "土地用途、权属、抵押和规划条件需要逐项核对。概念方案不能替代用地和资产手续。",
+        "housing_director": "城市建设要先确认安全短板、工程时序和长期运维。只有建设规模、没有排水和资金闭环的方案难以执行。",
+        "transport_director": "请把施工窗口、重载运输和替代路线放在同一张图上。多个项目同时开工可能让产业和民生运输都受影响。",
+        "agriculture_director": "防汛和项目排序也会影响农时、农田和农民收入。县域农业不能只作为工业方案的附带影响处理。",
+        "health_director": "医疗资源不能只看全市床位总数，还要看县域急救、专科能力和医院现金运行能否支撑。",
+        "education_director": "学校布局应依据真实学龄人口和通学条件。建校、师资和长期运行成本需要一起进入方案。",
+        "petitions_director": "重复来访背后可能是程序堵点，也可能是实体问题长期未解。建议先统一责任单位的事实和答复口径。",
+        "public_security_director": "公安会依法维护秩序并做好预案，但劳动、合同和行业治理问题仍需责任部门实质化解，不能先行安全化。",
+    }
+)
+
+
+ACTOR_DIRECTORY_GROUPS = {
+    "mayor": "市级班子",
+    "secretary_general": "市级班子",
+    "fulltime_deputy": "市级班子",
+    "executive_vice_mayor": "市级班子",
+    "industry_vice_mayor": "市级班子",
+    "discipline": "市级班子",
+    "organization_minister": "市级班子",
+    "propaganda_minister": "市级班子",
+    "political_legal_secretary": "市级班子",
+    "united_front_minister": "市级班子",
+    "garrison_commissar": "市级班子",
+    "county_secretary": "县区主官",
+    "nanchuan_secretary": "县区主官",
+    "environment_director": "市直部门",
+    "chairman": "企业与金融",
+    "banker": "企业与金融",
+    "superior": "上级",
+}
+
+
+ACTOR_DIRECTORY_GROUPS.update(
+    {
+        "linjiang_secretary": "县区主官",
+        "dongning_secretary": "县区主官",
+        "qingyuan_secretary": "县区主官",
+        "hezhou_secretary": "县区主官",
+        "finance_director": "市直部门",
+        "development_reform_director": "市直部门",
+        "industry_bureau_director": "市直部门",
+        "human_resources_director": "市直部门",
+        "water_director": "市直部门",
+        "emergency_director": "市直部门",
+        "state_assets_director": "市直部门",
+        "audit_director": "市直部门",
+        "natural_resources_director": "市直部门",
+        "housing_director": "市直部门",
+        "transport_director": "市直部门",
+        "agriculture_director": "市直部门",
+        "health_director": "市直部门",
+        "education_director": "市直部门",
+        "petitions_director": "市直部门",
+        "public_security_director": "市级班子",
+    }
+)
 
 
 def actor_context(actor_id: str) -> Dict[str, Any]:
@@ -397,6 +1031,14 @@ def actor_context(actor_id: str) -> Dict[str, Any]:
 
 def actor_belief_ids(actor_id: str) -> List[str]:
     return [item["id"] for item in ACTORS[actor_id]["beliefs"]]
+
+
+def public_reference_ids() -> List[str]:
+    return [item["id"] for item in PUBLIC_REFERENCE_MATERIALS]
+
+
+def actor_knowledge_ids(actor_id: str) -> List[str]:
+    return actor_belief_ids(actor_id) + public_reference_ids()
 
 
 def actor_label(actor_id: str) -> str:

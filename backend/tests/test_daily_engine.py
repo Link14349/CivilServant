@@ -1,5 +1,6 @@
 from civilservant.daily_engine import (
     actor_agent_projection,
+    add_conversation_reply,
     add_player_speech,
     begin_meeting_generation,
     close_day,
@@ -7,14 +8,18 @@ from civilservant.daily_engine import (
     commit_meeting_speech,
     create_daily_game,
     create_document_task,
+    hydrate_daily_actor_state,
     schedule_calendar_entry,
+    start_conversation,
     start_field_visit,
     start_meeting,
     submit_document,
+    template_conversation_utterance,
     template_meeting_utterance,
     to_daily_game_view,
 )
 from civilservant.daily_models import PostSceneResult, SuperiorReaction
+from civilservant.daily_scenario import ACTORS, PUBLIC_REFERENCE_MATERIALS
 
 
 def game(seed: int = 20260826):
@@ -111,6 +116,57 @@ def test_actor_projection_does_not_contain_other_private_beliefs() -> None:
     assert "mayor_cash_crisis" in serialized
     assert "county_real_jobs" not in serialized
     assert "chairman_collateral_truth" not in serialized
+    assert "finance_competing_requests" not in serialized
+    assert {item["id"] for item in projection["public_background"]} == {
+        item["id"] for item in PUBLIC_REFERENCE_MATERIALS
+    }
+
+
+def test_existing_save_hydrates_new_directory_actors_without_leaking_beliefs() -> None:
+    current = game()
+    original_version = current.version
+    for actor_id in ["nanchuan_secretary", "finance_director", "linjiang_secretary"]:
+        current.state["relations"].pop(actor_id)
+        current.state["actor_runtime"].pop(actor_id)
+
+    hydrated = hydrate_daily_actor_state(current)
+    assert hydrated.version == original_version
+    assert hydrated.state["relations"]["nanchuan_secretary"] == 50
+    assert hydrated.state["relations"]["finance_director"] == 50
+    assert hydrated.state["relations"]["linjiang_secretary"] == 50
+    actor = next(item for item in to_daily_game_view(hydrated).actors if item.id == "nanchuan_secretary")
+    assert actor.title == "南川区委书记"
+    assert actor.directory_group == "县区主官"
+
+    projection = actor_agent_projection(hydrated, "nanchuan_secretary")
+    serialized = str(projection)
+    assert "nanchuan_acceptance_gap" in serialized
+    assert "county_real_jobs" not in serialized
+
+
+def test_public_reference_materials_are_visible_to_every_actor_but_private_beliefs_are_not() -> None:
+    expected_public_ids = {item["id"] for item in PUBLIC_REFERENCE_MATERIALS}
+    current = game()
+    for actor_id in ACTORS:
+        projection = actor_agent_projection(current, actor_id)
+        assert {item["id"] for item in projection["public_background"]} == expected_public_ids
+    finance_projection = str(actor_agent_projection(current, "finance_director"))
+    assert "finance_competing_requests" in finance_projection
+    assert "water_design_gap" not in finance_projection
+
+
+def test_public_reference_can_be_used_in_conversation_without_becoming_a_private_reveal() -> None:
+    current = start_conversation(
+        game(),
+        idempotency_key="talk-finance-public-background",
+        actor_id="finance_director",
+        channel="private_meeting",
+    )
+    utterance = template_conversation_utterance(current, "finance_director", "先说说全市人口基本情况。")
+    assert utterance.used_belief_ids == ["ref-city-society"]
+    current = add_conversation_reply(current, utterance=utterance)
+    assert "ref-city-society" not in current.state["player_beliefs"]
+    assert "三百七十八万" in current.state["active_scene"]["transcript"][-1]["text"]
 
 
 def test_document_submission_preserves_source_and_creates_delayed_reaction() -> None:

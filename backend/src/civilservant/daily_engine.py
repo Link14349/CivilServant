@@ -21,22 +21,26 @@ from .daily_models import (
     MetricView,
     NotificationView,
     PostSceneResult,
+    ReferenceMaterialView,
     SceneParticipantView,
     SuperiorReaction,
     TranscriptTurnView,
 )
 from .daily_scenario import (
     ACTORS,
+    ACTOR_DIRECTORY_GROUPS,
     INITIAL_DOCUMENTS,
     INITIAL_ISSUES,
     INITIAL_METRICS,
     LOCATIONS,
     MEETING_TYPES,
     METRIC_DEFINITIONS,
+    PUBLIC_REFERENCE_MATERIALS,
     STANDING_COMMITTEE_MEMBER_IDS,
     TEMPLATE_UTTERANCES,
     actor_belief_ids,
     actor_context,
+    actor_knowledge_ids,
     actor_label,
 )
 from .models import StoredGame
@@ -51,6 +55,15 @@ ACTION_COSTS = {
     "field_visit": 2,
     "superior_meeting": 2,
 }
+
+
+def _initial_actor_runtime(actor_id: str) -> Dict[str, Any]:
+    return {
+        "memories": [],
+        "tasks": [],
+        "workload": 0,
+        "known_beliefs": actor_belief_ids(actor_id),
+    }
 
 
 def create_daily_game(
@@ -76,12 +89,7 @@ def create_daily_game(
         "relations": {actor_id: 50 for actor_id in ACTORS},
         "player_beliefs": [],
         "actor_runtime": {
-            actor_id: {
-                "memories": [],
-                "tasks": [],
-                "workload": 0,
-                "known_beliefs": actor_belief_ids(actor_id),
-            }
+            actor_id: _initial_actor_runtime(actor_id)
             for actor_id in ACTORS
         },
         "issues": deepcopy(INITIAL_ISSUES),
@@ -152,6 +160,23 @@ def create_daily_game(
 
 def is_daily_game(game: StoredGame) -> bool:
     return int(game.state.get("schema_version", 0)) == SCHEMA_VERSION
+
+
+def hydrate_daily_actor_state(game: StoredGame) -> StoredGame:
+    """Add newly shipped actors to an existing daily snapshot without changing its version."""
+    _require_daily(game)
+    relations = game.state.get("relations", {})
+    runtime = game.state.get("actor_runtime", {})
+    needs_hydration = any(actor_id not in relations or actor_id not in runtime for actor_id in ACTORS)
+    if not needs_hydration:
+        return game
+    updated = game.model_copy(deep=True)
+    updated_relations = updated.state.setdefault("relations", {})
+    updated_runtime = updated.state.setdefault("actor_runtime", {})
+    for actor_id in ACTORS:
+        updated_relations.setdefault(actor_id, 50)
+        updated_runtime.setdefault(actor_id, _initial_actor_runtime(actor_id))
+    return updated
 
 
 def command_was_processed(game: StoredGame, key: str) -> bool:
@@ -427,7 +452,7 @@ def add_conversation_reply(
         utterance.text,
     )
     for belief_id in utterance.used_belief_ids:
-        if belief_id not in updated.state["player_beliefs"]:
+        if belief_id in actor_belief_ids(actor_id) and belief_id not in updated.state["player_beliefs"]:
             updated.state["player_beliefs"].append(belief_id)
     updated.version += 1
     return updated
@@ -836,6 +861,27 @@ def template_conversation_utterance(game: StoredGame, actor_id: str, message: st
         "mayor": [("资金", "mayor_budget_gap"), ("工资", "mayor_cash_crisis"), ("现金", "mayor_cash_crisis")],
         "secretary_general": [("就业", "secretary_jobs_revision"), ("前任", "secretary_old_minutes"), ("纪要", "secretary_old_minutes")],
         "county_secretary": [("就业", "county_real_jobs"), ("名单", "county_real_jobs"), ("补贴", "county_subsidy_arrears")],
+        "nanchuan_secretary": [("验收", "nanchuan_acceptance_gap"), ("冲刷", "nanchuan_acceptance_gap"), ("物资", "nanchuan_material_shortage")],
+        "linjiang_secretary": [("土壤", "linjiang_brownfield_cost"), ("治理成本", "linjiang_brownfield_cost")],
+        "dongning_secretary": [("加工园", "dongning_processing_gap"), ("冷链", "dongning_processing_gap")],
+        "qingyuan_secretary": [("公路", "qingyuan_road_risk"), ("边坡", "qingyuan_road_risk")],
+        "hezhou_secretary": [("学校", "hezhou_school_transport"), ("校车", "hezhou_school_transport")],
+        "finance_director": [("新增支出", "finance_competing_requests"), ("可统筹", "finance_competing_requests"), ("预算", "finance_competing_requests")],
+        "development_reform_director": [("项目", "development_project_maturity"), ("要素", "development_project_maturity")],
+        "industry_bureau_director": [("就业", "industry_employment_estimate"), ("工信", "industry_employment_estimate")],
+        "human_resources_director": [("名单", "human_resources_roster_gap"), ("派遣", "human_resources_roster_gap")],
+        "water_director": [("险段", "water_design_gap"), ("冲刷", "water_design_gap"), ("加固", "water_design_gap")],
+        "emergency_director": [("物资", "emergency_stock_transfer"), ("调运", "emergency_stock_transfer")],
+        "state_assets_director": [("国企", "state_assets_capacity"), ("融资空间", "state_assets_capacity")],
+        "audit_director": [("审计", "audit_unsettled_funds"), ("专项资金", "audit_unsettled_funds")],
+        "natural_resources_director": [("土地", "natural_resources_mortgage_overlap"), ("抵押", "natural_resources_mortgage_overlap")],
+        "housing_director": [("排水", "housing_drainage_gap"), ("内涝", "housing_drainage_gap")],
+        "transport_director": [("桥梁", "transport_corridor_overlap"), ("货运", "transport_corridor_overlap")],
+        "agriculture_director": [("农田", "agriculture_flood_exposure"), ("排涝站", "agriculture_flood_exposure")],
+        "health_director": [("医院", "health_hospital_arrears"), ("耗材", "health_hospital_arrears")],
+        "education_director": [("学位", "education_capacity_gap"), ("小学", "education_capacity_gap")],
+        "petitions_director": [("重复来访", "petitions_repeated_cases"), ("信访", "petitions_repeated_cases")],
+        "public_security_director": [("讨薪", "public_security_contractors"), ("承包商", "public_security_contractors")],
         "environment_director": [("停产", "environment_window"), ("监测", "environment_window")],
         "chairman": [("抵押", "chairman_collateral_truth"), ("并购", "chairman_order_move")],
         "banker": [("授信", "bank_credit_line"), ("贷款", "bank_credit_line")],
@@ -848,7 +894,30 @@ def template_conversation_utterance(game: StoredGame, actor_id: str, message: st
         belief_lookup = {item["id"]: item for item in context["beliefs"]}
         details = "；".join(belief_lookup[item]["content"] for item in used)
         reply = "{} 我能确认的内部情况是：{}。".format(reply, details)
-    elif "不知道" in text or "真实" in text:
+    else:
+        public_topic_map = [
+            ("南川", "ref-nanchuan"),
+            ("临江", "ref-linjiang"),
+            ("北山", "ref-beishan"),
+            ("东宁", "ref-dongning"),
+            ("青源", "ref-qingyuan"),
+            ("和州", "ref-hezhou"),
+            ("人口", "ref-city-society"),
+            ("就业结构", "ref-city-society"),
+            ("经济", "ref-city-economy"),
+            ("财政基本盘", "ref-city-economy"),
+            ("自然", "ref-city-geography"),
+            ("地形", "ref-city-geography"),
+            ("气候", "ref-city-geography"),
+            ("交通", "ref-city-infrastructure"),
+            ("基础设施", "ref-city-infrastructure"),
+        ]
+        reference_by_id = {item["id"]: item for item in PUBLIC_REFERENCE_MATERIALS}
+        public_id = next((reference_id for keyword, reference_id in public_topic_map if keyword in text), None)
+        if public_id:
+            used.append(public_id)
+            reply = "{} 按公开市情资料，{}".format(reply, reference_by_id[public_id]["summary"])
+    if not used and ("不知道" in text or "真实" in text):
         reply = "{} 这件事超出我目前能确认的范围，建议指定渠道核查，不宜让我替别人下结论。".format(reply)
     return AgentUtterance(text=reply, used_belief_ids=used)
 
@@ -863,6 +932,7 @@ def template_meeting_utterance(game: StoredGame, actor_id: str) -> AgentUtteranc
 
 
 def actor_agent_projection(game: StoredGame, actor_id: str) -> Dict[str, Any]:
+    game = hydrate_daily_actor_state(game)
     context = actor_context(actor_id)
     state = game.state
     scene = state.get("active_scene")
@@ -885,6 +955,7 @@ def actor_agent_projection(game: StoredGame, actor_id: str) -> Dict[str, Any]:
     return {
         "date": state["current_date"],
         "actor": context,
+        "public_background": deepcopy(PUBLIC_REFERENCE_MATERIALS),
         "relationship_to_player": _relationship_band(int(state["relations"][actor_id])),
         "memories": state["actor_runtime"][actor_id]["memories"][-6:],
         "tasks": state["actor_runtime"][actor_id]["tasks"][-6:],
@@ -905,7 +976,7 @@ def actor_agent_projection(game: StoredGame, actor_id: str) -> Dict[str, Any]:
 
 
 def to_daily_game_view(game: StoredGame) -> DailyGameView:
-    _require_daily(game)
+    game = hydrate_daily_actor_state(game)
     state = game.state
     metrics = [
         MetricView(
@@ -927,6 +998,7 @@ def to_daily_game_view(game: StoredGame) -> DailyGameView:
             work_style=actor["work_style"],
             relation=int(state["relations"][actor_id]),
             availability="可协调" if state["actor_runtime"][actor_id]["workload"] < 3 else "任务较满",
+            directory_group=ACTOR_DIRECTORY_GROUPS[actor_id],
         )
         for actor_id, actor in ACTORS.items()
     ]
@@ -981,6 +1053,7 @@ def to_daily_game_view(game: StoredGame) -> DailyGameView:
         calendar=calendar,
         documents=documents,
         actors=actors,
+        reference_materials=[ReferenceMaterialView(**item) for item in PUBLIC_REFERENCE_MATERIALS],
         issues=[IssueView(**item) for item in state["issues"]],
         active_scene=active_scene,
         metrics=metrics,
@@ -1703,7 +1776,7 @@ def _standing_committee_present_count(participant_ids: Sequence[str]) -> int:
 
 
 def _validate_used_beliefs(actor_id: str, used_belief_ids: Sequence[str]) -> None:
-    allowed = set(actor_belief_ids(actor_id))
+    allowed = set(actor_knowledge_ids(actor_id))
     if not set(used_belief_ids).issubset(allowed):
         raise ValueError("人物 Agent 引用了其认知范围外的信息")
 

@@ -186,6 +186,23 @@ class DailyActorView(BaseModel):
     work_style: str
     relation: int
     availability: str
+    directory_group: str
+
+
+class ReferenceSectionView(BaseModel):
+    heading: str
+    body: str
+
+
+class ReferenceMaterialView(BaseModel):
+    id: str
+    category: str
+    title: str
+    subtitle: str
+    updated_date: str
+    summary: str
+    sections: List[ReferenceSectionView]
+    source_note: str
 
 
 class IssueView(BaseModel):
@@ -289,6 +306,7 @@ class DailyGameView(BaseModel):
     calendar: List[CalendarEntryView]
     documents: List[DocumentView]
     actors: List[DailyActorView]
+    reference_materials: List[ReferenceMaterialView]
     issues: List[IssueView]
     active_scene: Optional[ActiveSceneView] = None
     metrics: List[MetricView]

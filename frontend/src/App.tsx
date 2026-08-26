@@ -27,6 +27,7 @@ import type {
   DocumentItem,
   Game,
   MeetingType,
+  ReferenceMaterial,
   ScheduleKind,
 } from "./types";
 
@@ -39,7 +40,7 @@ const STORAGE = {
   templateGame: "civilservant.game.template",
 };
 
-type DeskTab = "briefing" | "documents" | "calendar" | "activity";
+type DeskTab = "briefing" | "documents" | "reference" | "calendar" | "activity";
 type ActionPanel = "talk" | "meeting" | "field" | "schedule" | "draft" | null;
 
 export default function App() {
@@ -214,7 +215,7 @@ function GameSetup({ credentials, initialError, onStarted, onChangeCredentials }
           <h2>工作不会按剧本排队发生</h2>
           <p>产业整改、财政约束、防汛准备和干部协同同时存在。你每天有有限行动点，可以谈话、开会、调研或向上汇报；批阅文件不耗行动点。</p>
           <p>属下只知道其渠道允许知道的情况，也会依据职责、立场和风险判断决定说什么、做什么。正式决定仍须经过相应程序。</p>
-          <div className="scenario-facts"><div><strong>每日</strong><span>动态晨报</span></div><div><strong>16 人</strong><span>独立角色</span></div><div><strong>开放</strong><span>没有固定回合</span></div></div>
+          <div className="scenario-facts"><div><strong>每日</strong><span>动态晨报</span></div><div><strong>完整</strong><span>组织联系人</span></div><div><strong>公开</strong><span>市情与县区资料</span></div></div>
         </article>
         <article className="paper-card identity-card">
           <p className="card-kicker">任命信息</p>
@@ -281,6 +282,7 @@ function GameBoard({ game, credentials, onGameChange, onNewGame, onChangeCredent
           <div className="nav-label">今日案头</div>
           <DeskNavButton active={tab === "briefing"} label="晨报" count={game.briefing.length} onClick={() => setTab("briefing")} />
           <DeskNavButton active={tab === "documents"} label="文件" count={game.documents.filter((item) => item.status !== "archived").length} onClick={() => setTab("documents")} />
+          <DeskNavButton active={tab === "reference"} label="市情资料" count={game.reference_materials.length} onClick={() => setTab("reference")} />
           <DeskNavButton active={tab === "calendar"} label="日程" count={dueNow.length} onClick={() => setTab("calendar")} />
           <DeskNavButton active={tab === "activity"} label="工作记录" count={game.activity.length} onClick={() => setTab("activity")} />
           <div className="nav-metrics">
@@ -299,6 +301,7 @@ function GameBoard({ game, credentials, onGameChange, onNewGame, onChangeCredent
             <>
               {tab === "briefing" && <BriefingDesk game={game} onOpenDocument={() => setTab("documents")} />}
               {tab === "documents" && <DocumentDesk game={game} credentials={credentials} busy={busy} onMutate={mutate} />}
+              {tab === "reference" && <ReferenceDesk materials={game.reference_materials} />}
               {tab === "calendar" && <CalendarDesk game={game} credentials={credentials} busy={busy} onMutate={mutate} onAdd={() => setPanel("schedule")} />}
               {tab === "activity" && <ActivityDesk game={game} />}
             </>
@@ -321,10 +324,11 @@ function GameBoard({ game, credentials, onGameChange, onNewGame, onChangeCredent
               <ActionButton label="交办文稿" note="不耗点" onClick={() => setPanel("draft")} />
             </section>
           )}
-          <section className="actor-directory">
-            <div className="nav-label">联系人</div>
-            {game.actors.slice(0, 9).map((actor) => <button key={actor.id} disabled={Boolean(game.active_scene) || game.action_budget.remaining < 1} onClick={() => { setPreferredActorId(actor.id); setPanel("talk"); }} title={`${actor.public_position} ${actor.known_note}`}><span>{actor.name.slice(-1)}</span><div><strong>{actor.name}</strong><small>{actor.title}</small></div><em>{actor.relation}</em></button>)}
-          </section>
+          <ContactDirectory
+            actors={game.actors}
+            disabled={Boolean(game.active_scene) || game.action_budget.remaining < 1}
+            onTalk={(actorId) => { setPreferredActorId(actorId); setPanel("talk"); }}
+          />
           {!game.active_scene && <button className="end-day-button" disabled={busy} onClick={() => void mutate(() => finishDay(game, credentials))}>结束今天并推进</button>}
         </aside>
       </div>
@@ -362,6 +366,41 @@ function DocumentDesk({ game, credentials, busy, onMutate }: { game: Game; crede
   );
 }
 
+function ReferenceDesk({ materials }: { materials: ReferenceMaterial[] }) {
+  const [selectedId, setSelectedId] = useState(materials[0]?.id ?? "");
+  const selected = materials.find((item) => item.id === selectedId) ?? materials[0];
+  const categories = [...new Set(materials.map((item) => item.category))];
+
+  return (
+    <>
+      <DeskHeading kicker="公共参考资料" title="岚州市情与县区概况" detail="这些是开局即公开、玩家和所有角色都能查阅的共同背景。它们提供稳定基线，不代表当前内部动态或隐藏事实。" />
+      <div className="reference-layout">
+        <nav className="reference-list" aria-label="市情资料目录">
+          {categories.map((category) => (
+            <section key={category}>
+              <h2>{category}</h2>
+              {materials.filter((item) => item.category === category).map((item) => (
+                <button className={selected?.id === item.id ? "active" : ""} key={item.id} onClick={() => setSelectedId(item.id)}>
+                  <strong>{item.title}</strong>
+                  <span>{item.subtitle}</span>
+                </button>
+              ))}
+            </section>
+          ))}
+        </nav>
+        {selected ? (
+          <article className="reference-reader">
+            <header><p>{selected.category} · 更新至 {selected.updated_date}</p><h2>{selected.title}</h2><span>{selected.subtitle}</span></header>
+            <div className="reference-summary">{selected.summary}</div>
+            {selected.sections.map((section) => <section key={section.heading}><h3>{section.heading}</h3><p>{section.body}</p></section>)}
+            <footer>{selected.source_note}</footer>
+          </article>
+        ) : <div className="empty-card">当前没有公共参考资料。</div>}
+      </div>
+    </>
+  );
+}
+
 function DocumentReader({ document, actors, note, recipient, busy, onNote, onRecipient, onAct, onSubmit }: {
   document: DocumentItem;
   actors: Actor[];
@@ -373,7 +412,12 @@ function DocumentReader({ document, actors, note, recipient, busy, onNote, onRec
   onAct: (operation: "annotate" | "return" | "forward" | "archive") => Promise<void>;
   onSubmit: () => Promise<void>;
 }) {
-  return <article className="document-reader"><header><p>{document.confidentiality} · {document.document_type}</p><h2>{document.title}</h2><span>{document.author_label} · 第 {document.version} 版</span></header><div className="document-summary">摘要：{document.summary}</div><div className="document-body">{document.content}</div><div className="formal-effect"><strong>当前效力</strong><span>{document.formal_effect}</span></div>{document.source_document_ids.length > 0 && <p className="lineage">引用材料：{document.source_document_ids.join("、")}</p>}{document.annotations.map((item) => <p className="annotation" key={item}>{item}</p>)}<label className="field-label" htmlFor="document-note">批示或报送说明</label><textarea id="document-note" rows={3} value={note} onChange={(event) => onNote(event.target.value)} placeholder="例如：请财政局核对资金来源，三日内报送。" /><div className="document-actions"><button disabled={busy || !note.trim()} onClick={() => void onAct("annotate")}>批注</button><button disabled={busy || !note.trim()} onClick={() => void onAct("return")}>退回修改</button><select value={recipient} onChange={(event) => onRecipient(event.target.value)}>{actors.filter((actor) => actor.id !== "superior").map((actor) => <option key={actor.id} value={actor.id}>{actor.name} · {actor.title}</option>)}</select><button disabled={busy} onClick={() => void onAct("forward")}>转办</button><button className="submit-up" disabled={busy} onClick={() => void onSubmit()}>报送省委书记</button></div></article>;
+  const forwardedRecipients = document.recipient_ids
+    .filter((actorId) => actorId !== "player")
+    .map((actorId) => actors.find((actor) => actor.id === actorId))
+    .filter((actor): actor is Actor => actor !== undefined);
+
+  return <article className="document-reader"><header><p>{document.confidentiality} · {document.document_type}</p><h2>{document.title}</h2><span>{document.author_label} · 第 {document.version} 版</span></header><div className="document-summary">摘要：{document.summary}</div><div className="document-body">{document.content}</div><div className="formal-effect"><strong>当前效力</strong><span>{document.formal_effect}</span></div>{forwardedRecipients.length > 0 && <div className="submission-route"><strong>已报送给</strong><span>{forwardedRecipients.map((actor) => `${actor.name} · ${actor.title}`).join("、")}</span></div>}{document.source_document_ids.length > 0 && <p className="lineage">引用材料：{document.source_document_ids.join("、")}</p>}{document.annotations.map((item) => <p className="annotation" key={item}>{item}</p>)}<label className="field-label" htmlFor="document-note">批示或报送说明</label><textarea id="document-note" rows={3} value={note} onChange={(event) => onNote(event.target.value)} placeholder="例如：请财政局核对资金来源，三日内报送。" /><div className="document-actions"><button disabled={busy || !note.trim()} onClick={() => void onAct("annotate")}>批注</button><button disabled={busy || !note.trim()} onClick={() => void onAct("return")}>退回修改</button><select value={recipient} onChange={(event) => onRecipient(event.target.value)}>{actors.filter((actor) => actor.id !== "superior").map((actor) => <option key={actor.id} value={actor.id}>{actor.name} · {actor.title}</option>)}</select><button disabled={busy} onClick={() => void onAct("forward")}>转办</button><button className="submit-up" disabled={busy} onClick={() => void onSubmit()}>报送省委书记</button></div></article>;
 }
 
 function CalendarDesk({ game, credentials, busy, onMutate, onAdd }: { game: Game; credentials: Credentials; busy: boolean; onMutate: (operation: () => Promise<Game>) => Promise<void>; onAdd: () => void }) {
@@ -447,6 +491,54 @@ function ActorSelect({ actors, value, onChange }: { actors: Actor[]; value: stri
 function DeskHeading({ kicker, title, detail, action }: { kicker: string; title: string; detail: string; action?: ReactNode }) { return <header className="desk-heading"><div><p className="section-kicker">{kicker}</p><h1>{title}</h1><span>{detail}</span></div>{action}</header>; }
 function DeskNavButton({ active, label, count, onClick }: { active: boolean; label: string; count: number; onClick: () => void }) { return <button className={`desk-nav-button ${active ? "active" : ""}`} onClick={onClick}><span>{label}</span><b>{count}</b></button>; }
 function ActionButton({ label, note, disabled = false, onClick }: { label: string; note: string; disabled?: boolean; onClick: () => void }) { return <button className="action-button" disabled={disabled} onClick={onClick}><span>{label}</span><small>{note}</small></button>; }
+
+const CONTACT_GROUP_ORDER = ["市级班子", "县区主官", "市直部门", "企业与金融", "上级"];
+
+function ContactDirectory({ actors, disabled, onTalk }: { actors: Actor[]; disabled: boolean; onTalk: (actorId: string) => void }) {
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+  const visibleActors = actors.filter((actor) => {
+    if (!normalizedQuery) return true;
+    return [actor.name, actor.title, actor.public_position, actor.known_note]
+      .join(" ")
+      .toLocaleLowerCase("zh-CN")
+      .includes(normalizedQuery);
+  });
+  const groups = [
+    ...CONTACT_GROUP_ORDER,
+    ...visibleActors.map((actor) => actor.directory_group).filter((group) => !CONTACT_GROUP_ORDER.includes(group)),
+  ].filter((group, index, all) => all.indexOf(group) === index && visibleActors.some((actor) => actor.directory_group === group));
+
+  return (
+    <section className="actor-directory">
+      <div className="nav-label">联系人 · {actors.length}</div>
+      <input
+        className="contact-search"
+        type="search"
+        aria-label="搜索联系人"
+        placeholder="搜索姓名或职务"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+      />
+      <div className="contact-groups">
+        {groups.map((group) => (
+          <section className="contact-group" key={group}>
+            <h3>{group}</h3>
+            {visibleActors.filter((actor) => actor.directory_group === group).map((actor) => (
+              <button key={actor.id} disabled={disabled} onClick={() => onTalk(actor.id)} title={`${actor.public_position} ${actor.known_note}`}>
+                <span>{actor.name.slice(-1)}</span>
+                <div><strong>{actor.name}</strong><small>{actor.title}</small></div>
+                <em>{actor.relation}</em>
+              </button>
+            ))}
+          </section>
+        ))}
+        {visibleActors.length === 0 && <p className="contact-empty">没有匹配的联系人</p>}
+      </div>
+    </section>
+  );
+}
+
 function CenteredMessage({ title, message, loading = false }: { title: string; message: string; loading?: boolean }) { return <main className="centered-message"><div className={loading ? "loading-mark" : "mini-seal"}>{loading ? "" : "岚"}</div><h1>{title}</h1><p>{message}</p></main>; }
 
 function persistCredentials(credentials: Credentials) {

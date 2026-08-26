@@ -88,6 +88,23 @@ export interface Actor {
   work_style: string;
   relation: number;
   availability: string;
+  directory_group: string;
+}
+
+export interface ReferenceSection {
+  heading: string;
+  body: string;
+}
+
+export interface ReferenceMaterial {
+  id: string;
+  category: string;
+  title: string;
+  subtitle: string;
+  updated_date: string;
+  summary: string;
+  sections: ReferenceSection[];
+  source_note: string;
 }
 
 export interface Issue {
@@ -191,6 +208,7 @@ export interface Game {
   calendar: CalendarEntry[];
   documents: DocumentItem[];
   actors: Actor[];
+  reference_materials: ReferenceMaterial[];
   issues: Issue[];
   active_scene: ActiveScene | null;
   metrics: Metric[];

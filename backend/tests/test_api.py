@@ -40,6 +40,19 @@ def test_create_daily_game_and_close_day(monkeypatch) -> None:
     assert game["action_budget"]["remaining"] == 4
     assert len(game["documents"]) >= 5
     assert len(game["briefing"]) >= 5
+    assert len(game["actors"]) == 37
+    assert len(game["reference_materials"]) == 10
+    assert {item["id"] for item in game["reference_materials"]} >= {
+        "ref-city-economy",
+        "ref-beishan",
+        "ref-nanchuan",
+    }
+    nanchuan = next(actor for actor in game["actors"] if actor["id"] == "nanchuan_secretary")
+    assert nanchuan["title"] == "南川区委书记"
+    assert nanchuan["directory_group"] == "县区主官"
+    finance = next(actor for actor in game["actors"] if actor["id"] == "finance_director")
+    assert finance["title"] == "市财政局局长"
+    assert finance["directory_group"] == "市直部门"
 
     response = client.post(
         "/api/games/{}/days/current/close".format(game["id"]),

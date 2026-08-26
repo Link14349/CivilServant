@@ -9,7 +9,7 @@ import httpx
 from .config import PROMPT_DIR
 from .daily_engine import actor_agent_projection
 from .daily_models import AgentUtterance, PostSceneResult, SpeechIntent, SuperiorReaction
-from .daily_scenario import actor_belief_ids
+from .daily_scenario import actor_knowledge_ids
 from .llm import LlmError, validate_api_base
 from .models import StoredGame
 
@@ -203,7 +203,7 @@ class DailyAgentProvider:
 
     @staticmethod
     def _validate_beliefs(actor_id: str, result: AgentUtterance) -> None:
-        if not set(result.used_belief_ids).issubset(set(actor_belief_ids(actor_id))):
+        if not set(result.used_belief_ids).issubset(set(actor_knowledge_ids(actor_id))):
             raise LlmError("人物 Agent 引用了其认知范围外的信息，输出已拒绝。")
 
 

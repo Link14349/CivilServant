@@ -24,6 +24,7 @@ from .daily_engine import (
     create_daily_game,
     create_document_task,
     discard_generation,
+    hydrate_daily_actor_state,
     is_daily_game,
     schedule_calendar_entry,
     start_conversation,
@@ -597,7 +598,7 @@ def _get_game(game_id: str) -> StoredGame:
         raise HTTPException(status_code=404, detail="没有找到这个存档。")
     if not is_daily_game(game):
         raise HTTPException(status_code=409, detail="这是旧版六回合存档，请新建逐日模拟存档。")
-    return game
+    return hydrate_daily_actor_state(game)
 
 
 def _prepare_command(game_id: str, version: int, key: str) -> tuple[StoredGame, bool]:
