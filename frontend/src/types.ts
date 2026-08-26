@@ -1,4 +1,8 @@
 export type GameMode = "live" | "template";
+export type SceneKind = "conversation" | "meeting" | "superior_meeting" | "field_visit";
+export type ScheduleKind = SceneKind;
+export type MeetingType = "symposium" | "secretary_special" | "coordination" | "standing_committee";
+export type DiscussionMode = "free" | "chaired";
 
 export interface AppConfig {
   default_model: string;
@@ -21,6 +25,60 @@ export interface Metric {
   higher_is_better: boolean;
 }
 
+export interface ActionBudget {
+  total: number;
+  remaining: number;
+  reserved_today: number;
+}
+
+export interface BriefingItem {
+  id: string;
+  category: "news" | "report" | "request" | "superior" | "schedule" | "reminder" | "rumor";
+  headline: string;
+  summary: string;
+  source: string;
+  urgency: "low" | "normal" | "high" | "critical";
+  document_id: string | null;
+  calendar_entry_id: string | null;
+}
+
+export interface CalendarEntry {
+  id: string;
+  date: string;
+  kind: ScheduleKind;
+  title: string;
+  participant_ids: string[];
+  participant_labels: string[];
+  location_id: string | null;
+  location_label: string | null;
+  meeting_type: MeetingType | null;
+  discussion_mode: DiscussionMode | null;
+  action_cost: number;
+  mandatory: boolean;
+  status: "scheduled" | "tentative" | "due" | "active" | "completed" | "canceled" | "conflict";
+  source: string;
+  notified: boolean;
+}
+
+export interface DocumentItem {
+  id: string;
+  version: number;
+  title: string;
+  document_type: string;
+  author_id: string;
+  author_label: string;
+  status: "draft" | "in_review" | "ready" | "submitted" | "received" | "returned" | "approved" | "issued" | "archived";
+  confidentiality: string;
+  created_date: string;
+  due_date: string | null;
+  summary: string;
+  content: string;
+  recipient_ids: string[];
+  source_document_ids: string[];
+  formal_effect: string;
+  annotations: string[];
+}
+
 export interface Actor {
   id: string;
   name: string;
@@ -29,126 +87,115 @@ export interface Actor {
   known_note: string;
   work_style: string;
   relation: number;
+  availability: string;
 }
 
-export interface Responsibility {
-  lead_actor_id: string | null;
-  lead_label: string;
-  participants: string[];
-  procedure: string;
-  record: string;
-}
-
-export interface Report {
+export interface Issue {
   id: string;
-  source: string;
   title: string;
   summary: string;
-  detail: string;
-  tone: "neutral" | "positive" | "cautious" | "warning" | "danger";
+  pressure: "low" | "medium" | "high" | "critical";
+  deadline: string | null;
+  known_status: string;
 }
 
-export interface GameOption {
+export interface SceneParticipant {
+  actor_id: string;
+  name: string;
+  title: string;
+  attendance_role: "chair" | "member" | "invitee" | "counterpart";
+  can_vote: boolean;
+}
+
+export interface TranscriptTurn {
+  id: string;
+  speaker_id: string;
+  speaker_name: string;
+  speaker_type: "player" | "npc" | "system";
+  text: string;
+  record_version: number;
+}
+
+export interface Generation {
+  id: string;
+  status: "idle" | "thinking" | "completed" | "canceled" | "discarded" | "failed";
+  actor_id: string | null;
+  message: string;
+}
+
+export interface ActiveScene {
+  id: string;
+  kind: SceneKind;
+  title: string;
+  status: "active" | "settling";
+  action_cost: number;
+  record_version: number;
+  meeting_type: MeetingType | null;
+  discussion_mode: DiscussionMode | null;
+  agenda: string | null;
+  location_id: string | null;
+  notified: boolean | null;
+  participants: SceneParticipant[];
+  transcript: TranscriptTurn[];
+  generation: Generation;
+  silence_count: number;
+  can_vote: boolean;
+  vote_result: string | null;
+}
+
+export interface Notification {
+  id: string;
+  date: string;
+  title: string;
+  detail: string;
+  tone: "neutral" | "positive" | "warning" | "danger";
+}
+
+export interface Activity {
+  id: string;
+  date: string;
+  kind: string;
+  title: string;
+  summary: string;
+  visible: boolean;
+}
+
+export interface ActionCatalogItem {
   id: string;
   label: string;
   description: string;
-  tradeoff: string;
-  responsibility: Responsibility;
+  action_cost: number;
 }
 
-export interface Dossier {
-  overview: string[];
-  timeline: { time: string; event: string }[];
-  stakes: { label: string; value: string; detail: string }[];
-  established: string[];
-  contested: string[];
-  procedure: string;
-}
-
-export interface Turn {
-  number: number;
-  total: number;
-  phase: string;
-  title: string;
-  date_label: string;
-  briefing: string;
-  dossier: Dossier;
-  question: string;
-  reports: Report[];
-  actor_ids: string[];
-  options: GameOption[];
-  custom_placeholder: string;
-  attention_remaining: number;
-}
-
-export interface Reaction {
-  actor_id: string;
-  text: string;
-}
-
-export interface HistoryEntry {
-  turn: number;
-  title: string;
-  choice: string;
-  directive_summary: string;
-  narrative: string;
-  effects: string[];
-  npc_reactions: Reaction[];
-  responsibility: Responsibility | null;
-}
-
-export type ConversationChannel = "private_meeting" | "written_inquiry";
-export type ConversationIntent = "inquire" | "sound_out" | "private_assignment" | "conditional_exchange";
-
-export interface Conversation {
-  id: string;
-  turn: number;
-  actor_id: string;
-  channel: ConversationChannel;
-  intent: ConversationIntent;
-  player_message: string;
-  reply: string;
-  disposition: string;
-  consequence_note: string;
-  commitment_summary: string | null;
-  requires_formal_decision: boolean;
-}
-
-export interface PrivateRecord {
-  id: string;
-  turn: number;
-  actor_id: string;
-  kind: string;
-  summary: string;
-  status: string;
-  visibility: string;
-  requires_formal_decision: boolean;
-}
-
-export interface Outcome {
-  grade: string;
-  title: string;
-  summary: string;
-  achievements: string[];
-  risks: string[];
-  epilogue: string;
+export interface ActionCatalog {
+  meeting_types: ActionCatalogItem[];
+  locations: ActionCatalogItem[];
 }
 
 export interface Game {
   id: string;
   version: number;
+  schema_version: number;
   player_name: string;
   role_title: string;
+  background: string;
   mode: GameMode;
   model: string;
   api_base: string;
   status: "active" | "completed";
-  turn: Turn | null;
-  metrics: Metric[];
+  current_date: string;
+  day_number: number;
+  day_phase: "reviewing" | "action" | "scene_active" | "settling";
+  action_budget: ActionBudget;
+  briefing: BriefingItem[];
+  calendar: CalendarEntry[];
+  documents: DocumentItem[];
   actors: Actor[];
-  history: HistoryEntry[];
-  commitments: string[];
-  conversations: Conversation[];
-  private_records: PrivateRecord[];
-  outcome: Outcome | null;
+  issues: Issue[];
+  active_scene: ActiveScene | null;
+  metrics: Metric[];
+  notifications: Notification[];
+  activity: Activity[];
+  pending_tasks: string[];
+  action_catalog: ActionCatalog;
 }
