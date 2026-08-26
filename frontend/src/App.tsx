@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   actOnDocument,
@@ -350,17 +350,21 @@ function BriefingDesk({ game, onOpenDocument }: { game: Game; onOpenDocument: ()
 }
 
 function DocumentDesk({ game, credentials, busy, onMutate }: { game: Game; credentials: Credentials; busy: boolean; onMutate: (operation: () => Promise<Game>) => Promise<void> }) {
-  const [selectedId, setSelectedId] = useState(game.documents[0]?.id ?? "");
-  const selected = game.documents.find((item) => item.id === selectedId) ?? game.documents[0];
+  const currentDocuments = game.documents.filter((item) => item.status !== "archived");
+  const archivedDocuments = game.documents.filter((item) => item.status === "archived");
+  const [folder, setFolder] = useState<"current" | "archived">("current");
+  const visibleDocuments = folder === "current" ? currentDocuments : archivedDocuments;
+  const [selectedId, setSelectedId] = useState(currentDocuments[0]?.id ?? "");
+  const selected = visibleDocuments.find((item) => item.id === selectedId) ?? visibleDocuments[0];
   const [note, setNote] = useState("");
   const [recipient, setRecipient] = useState("secretary_general");
 
   return (
     <>
-      <DeskHeading kicker="文件流转" title="批阅、转办与向上报送" detail="批阅文件不消耗行动点。你可以批注、退回、转办，或将一份已经形成的材料直接报送上级。" />
+      <DeskHeading kicker="文件流转" title="批阅、转办与向上报送" detail="批阅文件不消耗行动点。已经处理的文件在次日自动移入归档，不再占用待阅列表。" action={<div className="document-folder-tabs" role="tablist" aria-label="文件分组"><button className={folder === "current" ? "active" : ""} role="tab" aria-selected={folder === "current"} onClick={() => { setFolder("current"); setSelectedId(currentDocuments[0]?.id ?? ""); }}>待阅与在办 {currentDocuments.length}</button><button className={folder === "archived" ? "active" : ""} role="tab" aria-selected={folder === "archived"} onClick={() => { setFolder("archived"); setSelectedId(archivedDocuments[0]?.id ?? ""); }}>已归档 {archivedDocuments.length}</button></div>} />
       <div className="document-layout">
-        <div className="document-list">{game.documents.map((document) => <button className={selected?.id === document.id ? "active" : ""} key={document.id} onClick={() => { setSelectedId(document.id); setNote(""); }}><span>{document.author_label} · {document.created_date}</span><strong>{document.title}</strong><small>{documentStatus(document.status)}</small></button>)}</div>
-        {selected ? <DocumentReader document={selected} actors={game.actors} note={note} recipient={recipient} busy={busy} onNote={setNote} onRecipient={setRecipient} onAct={(operation) => onMutate(() => actOnDocument(game, credentials, selected.id, operation, note, recipient))} onSubmit={() => onMutate(() => submitDocument(game, credentials, selected.id, "superior", note))} /> : <div className="empty-card">当前没有呈阅文件。</div>}
+        <div className="document-list">{visibleDocuments.map((document) => <button className={selected?.id === document.id ? "active" : ""} key={document.id} onClick={() => { setSelectedId(document.id); setNote(""); }}><span>{document.author_label} · {document.created_date}</span><strong>{document.title}</strong><small>{documentStatus(document.status)}</small></button>)}</div>
+        {selected ? <DocumentReader readOnly={folder === "archived"} document={selected} actors={game.actors} note={note} recipient={recipient} busy={busy} onNote={setNote} onRecipient={setRecipient} onAct={(operation) => onMutate(() => actOnDocument(game, credentials, selected.id, operation, note, recipient))} onSubmit={() => onMutate(() => submitDocument(game, credentials, selected.id, "superior", note))} /> : <div className="empty-card">{folder === "archived" ? "当前没有归档文件。" : "当前没有待阅或在办文件。"}</div>}
       </div>
     </>
   );
@@ -401,12 +405,13 @@ function ReferenceDesk({ materials }: { materials: ReferenceMaterial[] }) {
   );
 }
 
-function DocumentReader({ document, actors, note, recipient, busy, onNote, onRecipient, onAct, onSubmit }: {
+function DocumentReader({ document, actors, note, recipient, busy, readOnly = false, onNote, onRecipient, onAct, onSubmit }: {
   document: DocumentItem;
   actors: Actor[];
   note: string;
   recipient: string;
   busy: boolean;
+  readOnly?: boolean;
   onNote: (value: string) => void;
   onRecipient: (value: string) => void;
   onAct: (operation: "annotate" | "return" | "forward" | "archive") => Promise<void>;
@@ -417,7 +422,7 @@ function DocumentReader({ document, actors, note, recipient, busy, onNote, onRec
     .map((actorId) => actors.find((actor) => actor.id === actorId))
     .filter((actor): actor is Actor => actor !== undefined);
 
-  return <article className="document-reader"><header><p>{document.confidentiality} · {document.document_type}</p><h2>{document.title}</h2><span>{document.author_label} · 第 {document.version} 版</span></header><div className="document-summary">摘要：{document.summary}</div><div className="document-body">{document.content}</div><div className="formal-effect"><strong>当前效力</strong><span>{document.formal_effect}</span></div>{forwardedRecipients.length > 0 && <div className="submission-route"><strong>已报送给</strong><span>{forwardedRecipients.map((actor) => `${actor.name} · ${actor.title}`).join("、")}</span></div>}{document.source_document_ids.length > 0 && <p className="lineage">引用材料：{document.source_document_ids.join("、")}</p>}{document.annotations.map((item) => <p className="annotation" key={item}>{item}</p>)}<label className="field-label" htmlFor="document-note">批示或报送说明</label><textarea id="document-note" rows={3} value={note} onChange={(event) => onNote(event.target.value)} placeholder="例如：请财政局核对资金来源，三日内报送。" /><div className="document-actions"><button disabled={busy || !note.trim()} onClick={() => void onAct("annotate")}>批注</button><button disabled={busy || !note.trim()} onClick={() => void onAct("return")}>退回修改</button><select value={recipient} onChange={(event) => onRecipient(event.target.value)}>{actors.filter((actor) => actor.id !== "superior").map((actor) => <option key={actor.id} value={actor.id}>{actor.name} · {actor.title}</option>)}</select><button disabled={busy} onClick={() => void onAct("forward")}>转办</button><button className="submit-up" disabled={busy} onClick={() => void onSubmit()}>报送省委书记</button></div></article>;
+  return <article className="document-reader"><header><p>{document.confidentiality} · {document.document_type}</p><h2>{document.title}</h2><span>{document.author_label} · 第 {document.version} 版</span></header><div className="document-summary">摘要：{document.summary}</div><div className="document-body">{document.content}</div><div className="formal-effect"><strong>当前效力</strong><span>{document.formal_effect}</span></div>{forwardedRecipients.length > 0 && <div className="submission-route"><strong>已报送给</strong><span>{forwardedRecipients.map((actor) => `${actor.name} · ${actor.title}`).join("、")}</span></div>}{document.source_document_ids.length > 0 && <p className="lineage">引用材料：{document.source_document_ids.join("、")}</p>}{document.annotations.map((item) => <p className="annotation" key={item}>{item}</p>)}{readOnly ? <p className="archive-notice">本件已归档，仅供查阅；后续处理应基于新来文或形成新的文件版本。</p> : <><label className="field-label" htmlFor="document-note">批示或报送说明</label><textarea id="document-note" rows={3} value={note} onChange={(event) => onNote(event.target.value)} placeholder="例如：请财政局核对资金来源，三日内报送。" /><div className="document-actions"><button disabled={busy || !note.trim()} onClick={() => void onAct("annotate")}>批注</button><button disabled={busy || !note.trim()} onClick={() => void onAct("return")}>退回修改</button><select value={recipient} onChange={(event) => onRecipient(event.target.value)}>{actors.filter((actor) => actor.id !== "superior").map((actor) => <option key={actor.id} value={actor.id}>{actor.name} · {actor.title}</option>)}</select><button disabled={busy} onClick={() => void onAct("forward")}>转办</button><button className="submit-up" disabled={busy} onClick={() => void onSubmit()}>报送省委书记</button></div></>}</article>;
 }
 
 function CalendarDesk({ game, credentials, busy, onMutate, onAdd }: { game: Game; credentials: Credentials; busy: boolean; onMutate: (operation: () => Promise<Game>) => Promise<void>; onAdd: () => void }) {
@@ -435,6 +440,12 @@ function SceneView({ game, credentials, busy, onMutate }: { game: Game; credenti
   const [resolution, setResolution] = useState("");
   const isMeeting = scene.kind === "meeting";
   const thinking = scene.generation.status === "thinking";
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const element = transcriptRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [scene.transcript]);
 
   async function speak() {
     if (!speech.trim()) return;
@@ -443,7 +454,7 @@ function SceneView({ game, credentials, busy, onMutate }: { game: Game; credenti
     await onMutate(() => sendPlayerSpeech(game, credentials, text));
   }
 
-  return <section className="scene-shell"><header className="scene-header"><div><p className="section-kicker">{sceneKind(scene.kind)} · 已消耗 {scene.action_cost} 点</p><h1>{scene.title}</h1>{scene.agenda && <span>议题：{scene.agenda}</span>}</div>{thinking && <div className="thinking"><i /><span>{scene.generation.message}</span></div>}</header><div className="participant-strip">{scene.participants.map((item) => <span key={item.actor_id}>{item.name}<small>{item.attendance_role === "chair" ? "主持" : item.can_vote ? "成员" : "列席"}</small></span>)}</div><div className="transcript" aria-live="polite">{scene.transcript.map((turn) => <article className={turn.speaker_type} key={turn.id}><div>{turn.speaker_name}</div><p>{turn.text}</p></article>)}</div>{scene.generation.status === "canceled" && <p className="generation-note">{scene.generation.message}</p>}{isMeeting && <div className="meeting-controls"><span>{scene.discussion_mode === "free" ? "自由磋商：参会者会自行判断是否发言" : "主持磋商：由你点名发言"}</span>{scene.discussion_mode === "free" ? <button disabled={busy || thinking} onClick={() => void onMutate(() => generateMeetingSpeech(game, credentials))}>让会议继续</button> : <div className="nominate-list">{scene.participants.filter((item) => item.actor_id !== "player").map((item) => <button disabled={busy || thinking} key={item.actor_id} onClick={() => void onMutate(() => generateMeetingSpeech(game, credentials, item.actor_id))}>请{item.name}发言</button>)}</div>}</div>}<div className="speech-box"><label htmlFor="player-speech">你的发言或追问</label><textarea id="player-speech" rows={4} value={speech} maxLength={2400} onChange={(event) => setSpeech(event.target.value)} placeholder={thinking ? "你可以随时发言，正在生成的 NPC 发言会被中断。" : "可以追问事实、表明目标、划定红线或作出交办。"} /><button className="primary-button" disabled={busy || !speech.trim()} onClick={() => void speak()}>{thinking ? "打断并发言" : "发言"}</button></div>{scene.can_vote && <div className="vote-box"><label htmlFor="resolution">拟表决事项</label><textarea id="resolution" rows={3} value={resolution} onChange={(event) => setResolution(event.target.value)} placeholder="写清需要集体表决的决定。" />{scene.vote_result ? <p>{scene.vote_result}</p> : <button disabled={busy || !resolution.trim() || thinking} onClick={() => void onMutate(() => voteMeeting(game, credentials, resolution.trim()))}>提请表决</button>}</div>}<div className="scene-footer"><span>结束后，人物会依据会谈内容形成记忆，并可能联络他人、准备材料或提出后续行动。</span><button className="ghost-button" disabled={busy || thinking} onClick={() => void onMutate(() => finishScene(game, credentials, resolution.trim()))}>结束并结算</button></div></section>;
+  return <section className="scene-shell"><header className="scene-header"><div><p className="section-kicker">{sceneKind(scene.kind)} · 已消耗 {scene.action_cost} 点</p><h1>{scene.title}</h1>{scene.agenda && <span>议题：{scene.agenda}</span>}</div>{thinking && <div className="thinking"><i /><span>{scene.generation.message}</span></div>}</header><div className="participant-strip">{scene.participants.map((item) => <span key={item.actor_id}>{item.name}<small>{item.attendance_role === "chair" ? "主持" : item.can_vote ? "成员" : "列席"}</small></span>)}</div><div className="transcript" aria-live="polite" ref={transcriptRef}>{scene.transcript.map((turn) => <article className={turn.speaker_type} key={turn.id}><div>{turn.speaker_name}</div><p>{turn.text}</p></article>)}</div>{scene.generation.status === "canceled" && <p className="generation-note">{scene.generation.message}</p>}{isMeeting && <div className="meeting-controls"><span>{scene.discussion_mode === "free" ? "自由磋商：参会者会自行判断是否发言" : "主持磋商：由你点名发言"}</span>{scene.discussion_mode === "free" ? <button disabled={busy || thinking} onClick={() => void onMutate(() => generateMeetingSpeech(game, credentials))}>让会议继续</button> : <div className="nominate-list">{scene.participants.filter((item) => item.actor_id !== "player").map((item) => <button disabled={busy || thinking} key={item.actor_id} onClick={() => void onMutate(() => generateMeetingSpeech(game, credentials, item.actor_id))}>请{item.name}发言</button>)}</div>}</div>}<div className="speech-box"><label htmlFor="player-speech">你的发言或追问</label><textarea id="player-speech" rows={4} value={speech} maxLength={2400} onChange={(event) => setSpeech(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!busy) void speak(); } }} placeholder={thinking ? "你可以随时发言，正在生成的 NPC 发言会被中断。" : "可以追问事实、表明目标、划定红线或作出交办。"} /><button className="primary-button" disabled={busy || !speech.trim()} onClick={() => void speak()}>{thinking ? "打断并发言" : "发言"}</button></div>{scene.can_vote && <div className="vote-box"><label htmlFor="resolution">拟表决事项</label><textarea id="resolution" rows={3} value={resolution} onChange={(event) => setResolution(event.target.value)} placeholder="写清需要集体表决的决定。" />{scene.vote_result ? <p>{scene.vote_result}</p> : <button disabled={busy || !resolution.trim() || thinking} onClick={() => void onMutate(() => voteMeeting(game, credentials, resolution.trim()))}>提请表决</button>}</div>}<div className="scene-footer"><span>结束后，人物会依据会谈内容形成记忆，并可能联络他人、准备材料或提出后续行动。</span><button className="ghost-button" disabled={busy || thinking} onClick={() => void onMutate(() => finishScene(game, credentials, resolution.trim()))}>结束并结算</button></div></section>;
 }
 
 function ActionDrawer({ panel, initialActorId, game, credentials, busy, onClose, onMutate }: { panel: Exclude<ActionPanel, null>; initialActorId: string | null; game: Game; credentials: Credentials; busy: boolean; onClose: () => void; onMutate: (operation: () => Promise<Game>) => Promise<void> }) {

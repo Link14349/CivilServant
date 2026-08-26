@@ -1023,6 +1023,122 @@ ACTOR_DIRECTORY_GROUPS.update(
 )
 
 
+CITY_INSIDER_GROUPS = {"市级班子", "县区主官", "市直部门"}
+EXTERNAL_STAKEHOLDER_IDS = {"chairman", "banker"}
+
+# These links describe whom an external or provincial actor is expected to know
+# personally. Municipal leaders, county principals and bureau heads receive the
+# full municipal public roster because they work inside the same cadre and
+# coordination system; the entries never include another actor's private goal or
+# beliefs.
+ACTOR_STAKEHOLDER_LINKS = {
+    "chairman": [
+        "player",
+        "mayor",
+        "secretary_general",
+        "executive_vice_mayor",
+        "industry_vice_mayor",
+        "county_secretary",
+        "environment_director",
+        "finance_director",
+        "development_reform_director",
+        "industry_bureau_director",
+        "human_resources_director",
+        "state_assets_director",
+        "banker",
+    ],
+    "banker": [
+        "player",
+        "mayor",
+        "secretary_general",
+        "executive_vice_mayor",
+        "industry_vice_mayor",
+        "county_secretary",
+        "finance_director",
+        "development_reform_director",
+        "state_assets_director",
+        "audit_director",
+        "natural_resources_director",
+        "chairman",
+    ],
+    "superior": [item for item in STANDING_COMMITTEE_MEMBER_IDS],
+}
+
+
+ACTOR_SUPERVISOR_IDS = {
+    "mayor": ["player", "superior"],
+    "fulltime_deputy": ["player"],
+    "secretary_general": ["player"],
+    "executive_vice_mayor": ["player", "mayor"],
+    "industry_vice_mayor": ["player", "mayor"],
+    "discipline": ["player"],
+    "organization_minister": ["player"],
+    "propaganda_minister": ["player"],
+    "political_legal_secretary": ["player"],
+    "united_front_minister": ["player"],
+    "garrison_commissar": ["player"],
+    "public_security_director": ["player", "mayor", "political_legal_secretary"],
+    "finance_director": ["mayor", "executive_vice_mayor"],
+    "development_reform_director": ["mayor", "executive_vice_mayor"],
+    "state_assets_director": ["mayor", "executive_vice_mayor"],
+    "audit_director": ["mayor", "executive_vice_mayor"],
+    "natural_resources_director": ["mayor", "executive_vice_mayor"],
+    "industry_bureau_director": ["mayor", "industry_vice_mayor"],
+    "human_resources_director": ["mayor", "industry_vice_mayor"],
+    "environment_director": ["mayor", "industry_vice_mayor"],
+    "water_director": ["mayor"],
+    "emergency_director": ["mayor"],
+    "housing_director": ["mayor"],
+    "transport_director": ["mayor"],
+    "agriculture_director": ["mayor"],
+    "health_director": ["mayor"],
+    "education_director": ["mayor"],
+    "petitions_director": ["player", "political_legal_secretary"],
+    "county_secretary": ["player", "mayor"],
+    "nanchuan_secretary": ["player", "mayor"],
+    "linjiang_secretary": ["player", "mayor"],
+    "dongning_secretary": ["player", "mayor"],
+    "qingyuan_secretary": ["player", "mayor"],
+    "hezhou_secretary": ["player", "mayor"],
+    "chairman": ["county_secretary", "industry_vice_mayor"],
+    "banker": ["superior"],
+    "superior": [],
+}
+
+
+def actor_acquaintance_ids(actor_id: str) -> List[str]:
+    """Return the public people roster that this actor can identify and reason about."""
+    if actor_id not in ACTORS:
+        raise KeyError(actor_id)
+    group = ACTOR_DIRECTORY_GROUPS[actor_id]
+    if group in CITY_INSIDER_GROUPS:
+        candidates = ["player", "superior"] + [
+            item_id
+            for item_id in ACTORS
+            if ACTOR_DIRECTORY_GROUPS[item_id] in CITY_INSIDER_GROUPS
+        ]
+        candidates.extend(EXTERNAL_STAKEHOLDER_IDS)
+    else:
+        candidates = list(ACTOR_STAKEHOLDER_LINKS.get(actor_id, ["player"]))
+    if actor_id in ACTOR_SUPERVISOR_IDS:
+        candidates.extend(ACTOR_SUPERVISOR_IDS[actor_id])
+    return list(dict.fromkeys(item for item in candidates if item != actor_id))
+
+
+def actor_organizational_relationship(observer_id: str, target_id: str) -> str:
+    if target_id in ACTOR_SUPERVISOR_IDS.get(observer_id, []):
+        return "上级或主要汇报对象"
+    if observer_id in ACTOR_SUPERVISOR_IDS.get(target_id, []):
+        return "分管或联系范围内的下级"
+    if observer_id in STANDING_COMMITTEE_MEMBER_IDS and target_id in STANDING_COMMITTEE_MEMBER_IDS:
+        return "市委常委班子同事"
+    if target_id in EXTERNAL_STAKEHOLDER_IDS or observer_id in EXTERNAL_STAKEHOLDER_IDS:
+        return "工作利益相关方"
+    if target_id == "superior":
+        return "省级上级"
+    return "同一地方治理网络中的工作联系人"
+
+
 def actor_context(actor_id: str) -> Dict[str, Any]:
     if actor_id not in ACTORS:
         raise KeyError(actor_id)

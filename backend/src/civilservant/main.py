@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import DEFAULT_API_BASE, DEFAULT_MODEL, FRONTEND_DIST
 from .daily_engine import (
+    SCHEMA_VERSION,
     act_on_document,
     add_conversation_reply,
     add_player_speech,
@@ -79,7 +80,7 @@ def health() -> dict:
     return {
         "ok": True,
         "default_model": DEFAULT_MODEL,
-        "game_schema_version": 2,
+        "game_schema_version": SCHEMA_VERSION,
     }
 
 

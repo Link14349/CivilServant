@@ -10,6 +10,7 @@ from .daily_models import (
     ActionBudgetView,
     ActiveSceneView,
     ActivityView,
+    AgentToolEffect,
     AgentUtterance,
     BriefingItemView,
     CalendarEntryView,
@@ -26,6 +27,7 @@ from .daily_models import (
     SuperiorReaction,
     TranscriptTurnView,
 )
+from .daily_agent_tools import known_people_projection
 from .daily_scenario import (
     ACTORS,
     ACTOR_DIRECTORY_GROUPS,
@@ -38,15 +40,16 @@ from .daily_scenario import (
     PUBLIC_REFERENCE_MATERIALS,
     STANDING_COMMITTEE_MEMBER_IDS,
     TEMPLATE_UTTERANCES,
+    actor_acquaintance_ids,
     actor_belief_ids,
     actor_context,
-    actor_knowledge_ids,
     actor_label,
 )
 from .models import StoredGame
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+SUPPORTED_DAILY_SCHEMA_VERSIONS = {2, 3}
 START_DATE = date(2026, 9, 1)
 DAILY_ACTION_POINTS = 4
 ACTION_COSTS = {
@@ -57,12 +60,34 @@ ACTION_COSTS = {
 }
 
 
-def _initial_actor_runtime(actor_id: str) -> Dict[str, Any]:
+def _initial_actor_runtime(actor_id: str, current_date: str = START_DATE.isoformat()) -> Dict[str, Any]:
     return {
         "memories": [],
         "tasks": [],
         "workload": 0,
         "known_beliefs": actor_belief_ids(actor_id),
+        "knowledge": [
+            {
+                "id": item["id"],
+                "claim": item["content"],
+                "source": item["source"],
+                "acquired_date": current_date,
+                "confidence": "high",
+                "kind": "initial_private",
+                "status": "active",
+                "related_actor_ids": [],
+                "related_issue_ids": [],
+            }
+            for item in ACTORS[actor_id]["beliefs"]
+        ],
+        "relationships": {
+            target_id: {
+                "score": 50,
+                "last_updated": current_date,
+                "note": "只有公开工作关系，尚无足够亲历判断。",
+            }
+            for target_id in actor_acquaintance_ids(actor_id)
+        },
     }
 
 
@@ -89,9 +114,11 @@ def create_daily_game(
         "relations": {actor_id: 50 for actor_id in ACTORS},
         "player_beliefs": [],
         "actor_runtime": {
-            actor_id: _initial_actor_runtime(actor_id)
+            actor_id: _initial_actor_runtime(actor_id, start.isoformat())
             for actor_id in ACTORS
         },
+        "commitments": [],
+        "scene_archive": [],
         "issues": deepcopy(INITIAL_ISSUES),
         "documents": [],
         "document_tasks": [],
@@ -159,23 +186,53 @@ def create_daily_game(
 
 
 def is_daily_game(game: StoredGame) -> bool:
-    return int(game.state.get("schema_version", 0)) == SCHEMA_VERSION
+    return int(game.state.get("schema_version", 0)) in SUPPORTED_DAILY_SCHEMA_VERSIONS
 
 
 def hydrate_daily_actor_state(game: StoredGame) -> StoredGame:
-    """Add newly shipped actors to an existing daily snapshot without changing its version."""
+    """Add newly shipped Agent state to an existing snapshot without changing its version."""
     _require_daily(game)
     relations = game.state.get("relations", {})
     runtime = game.state.get("actor_runtime", {})
-    needs_hydration = any(actor_id not in relations or actor_id not in runtime for actor_id in ACTORS)
+    needs_hydration = (
+        int(game.state.get("schema_version", 0)) != SCHEMA_VERSION
+        or "commitments" not in game.state
+        or "scene_archive" not in game.state
+        or any(
+            actor_id not in relations
+            or actor_id not in runtime
+            or "knowledge" not in runtime.get(actor_id, {})
+            or "tasks" not in runtime.get(actor_id, {})
+            or "memories" not in runtime.get(actor_id, {})
+            or "relationships" not in runtime.get(actor_id, {})
+            for actor_id in ACTORS
+        )
+    )
     if not needs_hydration:
         return game
     updated = game.model_copy(deep=True)
+    updated.state["schema_version"] = SCHEMA_VERSION
+    updated.state.setdefault("commitments", [])
+    updated.state.setdefault("scene_archive", [])
     updated_relations = updated.state.setdefault("relations", {})
     updated_runtime = updated.state.setdefault("actor_runtime", {})
     for actor_id in ACTORS:
         updated_relations.setdefault(actor_id, 50)
-        updated_runtime.setdefault(actor_id, _initial_actor_runtime(actor_id))
+        actor_runtime = updated_runtime.setdefault(
+            actor_id,
+            _initial_actor_runtime(actor_id, updated.state["current_date"]),
+        )
+        defaults = _initial_actor_runtime(actor_id, updated.state["current_date"])
+        actor_runtime.setdefault("memories", [])
+        actor_runtime.setdefault("tasks", [])
+        actor_runtime.setdefault("workload", 0)
+        actor_runtime.setdefault("known_beliefs", defaults["known_beliefs"])
+        actor_runtime.setdefault("knowledge", defaults["knowledge"])
+        relationships = actor_runtime.setdefault("relationships", {})
+        for target_id, relationship in defaults["relationships"].items():
+            relationships.setdefault(target_id, relationship)
+    for document in updated.state.get("documents", []):
+        document.setdefault("handled_date", None)
     return updated
 
 
@@ -442,7 +499,7 @@ def add_conversation_reply(
         for item in scene["participants"]
         if item["actor_id"] != "player"
     )
-    _validate_used_beliefs(actor_id, utterance.used_belief_ids)
+    _validate_used_beliefs(game, actor_id, utterance.used_belief_ids)
     updated = game.model_copy(deep=True)
     _append_transcript(
         updated.state["active_scene"],
@@ -452,8 +509,15 @@ def add_conversation_reply(
         utterance.text,
     )
     for belief_id in utterance.used_belief_ids:
-        if belief_id in actor_belief_ids(actor_id) and belief_id not in updated.state["player_beliefs"]:
+        if belief_id not in {item["id"] for item in PUBLIC_REFERENCE_MATERIALS} and belief_id not in updated.state["player_beliefs"]:
             updated.state["player_beliefs"].append(belief_id)
+    _apply_agent_tool_effects(
+        updated.state,
+        updated.state["active_scene"],
+        actor_id,
+        utterance.tool_effects,
+        settlement=False,
+    )
     updated.version += 1
     return updated
 
@@ -534,7 +598,7 @@ def commit_meeting_speech(
         or int(generation.get("started_record_version", -1)) != int(scene["record_version"])
     ):
         raise ValueError("这次发言生成已经失效")
-    _validate_used_beliefs(actor_id, utterance.used_belief_ids)
+    _validate_used_beliefs(game, actor_id, utterance.used_belief_ids)
     updated = game.model_copy(deep=True)
     updated_scene = updated.state["active_scene"]
     _append_transcript(
@@ -543,6 +607,13 @@ def commit_meeting_speech(
         ACTORS[actor_id]["name"],
         "npc",
         utterance.text,
+    )
+    _apply_agent_tool_effects(
+        updated.state,
+        updated_scene,
+        actor_id,
+        utterance.tool_effects,
+        settlement=False,
     )
     updated_scene["generation"] = {
         "id": generation_id,
@@ -653,6 +724,11 @@ def close_scene(
         "{}结束".format(scene["title"]),
         resolution.strip() if resolution else "场景记录已经冻结，人物开始处理会后事项。",
     )
+    archived_scene = deepcopy(scene)
+    archived_scene["closed_date"] = updated.state["current_date"]
+    archived_scene["resolution"] = resolution.strip() if resolution else None
+    archived_scene["status"] = "completed"
+    updated.state["scene_archive"].append(archived_scene)
     updated.state["active_scene"] = None
     updated.state["day_phase"] = "action"
     _activate_next_due_schedule(updated)
@@ -678,11 +754,13 @@ def act_on_document(
             raise ValueError("批示不能为空")
         document["annotations"].append(note.strip())
         document["version"] += 1
+        document["handled_date"] = updated.state["current_date"]
         _add_activity(updated.state, "document", "批示文件", "{}：{}".format(document["title"], note.strip()))
     elif operation == "return":
         document["status"] = "returned"
         document["annotations"].append(note.strip() or "请补充事实、依据和待拍板事项后重报。")
         document["version"] += 1
+        document["handled_date"] = updated.state["current_date"]
         _add_activity(updated.state, "document", "退回文件", document["title"])
     elif operation == "forward":
         if not recipient_id:
@@ -692,6 +770,7 @@ def act_on_document(
         document["recipient_ids"] = list(dict.fromkeys(document["recipient_ids"] + [recipient_id]))
         document["status"] = "submitted"
         document["version"] += 1
+        document["handled_date"] = updated.state["current_date"]
         _add_activity(
             updated.state,
             "document",
@@ -701,6 +780,7 @@ def act_on_document(
     elif operation == "archive":
         document["status"] = "archived"
         document["version"] += 1
+        document["handled_date"] = updated.state["current_date"]
     else:
         raise ValueError("不支持的文件操作")
     return _finish_command(updated, idempotency_key)
@@ -765,6 +845,7 @@ def submit_document(
     document["status"] = "submitted"
     document["recipient_ids"] = list(dict.fromkeys(document["recipient_ids"] + [recipient_id]))
     document["version"] += 1
+    document["handled_date"] = updated.state["current_date"]
     if cover_note.strip():
         document["annotations"].append("呈报说明：{}".format(cover_note.strip()))
     _add_activity(
@@ -832,6 +913,7 @@ def close_day(game: StoredGame, *, idempotency_key: str) -> StoredGame:
         if entry["date"] == current.isoformat() and entry["status"] in {"scheduled", "due"}:
             entry["status"] = "conflict"
             _change_metric(updated.state, "org_credit", -1)
+    _archive_handled_documents(updated.state, current.isoformat())
     _settle_daily_world(updated)
     next_date = current + timedelta(days=1)
     updated.state["current_date"] = next_date.isoformat()
@@ -850,6 +932,19 @@ def close_day(game: StoredGame, *, idempotency_key: str) -> StoredGame:
     _activate_next_due_schedule(updated)
     _add_activity(updated.state, "day", "进入新的一天", "第{}日，{}。".format(updated.state["day_number"], next_date.isoformat()))
     return _finish_command(updated, idempotency_key)
+
+
+def _archive_handled_documents(state: Dict[str, Any], closing_date: str) -> None:
+    for document in state["documents"]:
+        if document.get("handled_date") != closing_date or document["status"] == "archived":
+            continue
+        document["status"] = "archived"
+        _add_activity(
+            state,
+            "archive",
+            "文件转入归档",
+            "《{}》已在当日处理完毕，次日起不再占用待阅文件列表。".format(document["title"]),
+        )
 
 
 def template_conversation_utterance(game: StoredGame, actor_id: str, message: str) -> AgentUtterance:
@@ -934,6 +1029,7 @@ def template_meeting_utterance(game: StoredGame, actor_id: str) -> AgentUtteranc
 def actor_agent_projection(game: StoredGame, actor_id: str) -> Dict[str, Any]:
     game = hydrate_daily_actor_state(game)
     context = actor_context(actor_id)
+    context.pop("beliefs", None)
     state = game.state
     scene = state.get("active_scene")
     visible_document_ids = [
@@ -946,19 +1042,41 @@ def actor_agent_projection(game: StoredGame, actor_id: str) -> Dict[str, Any]:
             "id": document["id"],
             "version": document["version"],
             "title": document["title"],
+            "document_type": document["document_type"],
+            "author_id": document["author_id"],
             "summary": document["summary"],
             "status": document["status"],
+            "created_date": document["created_date"],
+            "confidentiality": document["confidentiality"],
         }
         for document in state["documents"]
         if document["id"] in visible_document_ids
     ]
+    known_people = known_people_projection(game, actor_id)
+    known_people_ids = {item["id"] for item in known_people}
+    if scene:
+        for participant in scene["participants"]:
+            participant_id = participant["actor_id"]
+            if participant_id in known_people_ids or participant_id == actor_id:
+                continue
+            known_people.append(_public_person_profile(game, actor_id, participant_id))
+            known_people_ids.add(participant_id)
+    runtime = state["actor_runtime"][actor_id]
     return {
         "date": state["current_date"],
         "actor": context,
+        "known_people": known_people,
         "public_background": deepcopy(PUBLIC_REFERENCE_MATERIALS),
         "relationship_to_player": _relationship_band(int(state["relations"][actor_id])),
-        "memories": state["actor_runtime"][actor_id]["memories"][-6:],
-        "tasks": state["actor_runtime"][actor_id]["tasks"][-6:],
+        "knowledge": _retrieve_actor_knowledge(runtime, scene),
+        "memories": _retrieve_actor_memories(runtime, scene),
+        "tasks": _retrieve_actor_tasks(runtime),
+        "commitments": [
+            deepcopy(item)
+            for item in state.get("commitments", [])
+            if actor_id in item.get("known_by_ids", [])
+            or actor_id in {item.get("giver_id"), item.get("receiver_id")}
+        ][-8:],
         "visible_documents": visible_documents,
         "scene": {
             "kind": scene["kind"],
@@ -966,13 +1084,98 @@ def actor_agent_projection(game: StoredGame, actor_id: str) -> Dict[str, Any]:
             "agenda": scene.get("agenda"),
             "participants": [item["actor_id"] for item in scene["participants"]],
             "transcript": [
-                {"speaker_id": item["speaker_id"], "text": item["text"]}
-                for item in scene["transcript"][-12:]
+                {"turn_id": item["id"], "speaker_id": item["speaker_id"], "text": item["text"]}
+                for item in scene["transcript"][-24:]
             ],
         }
         if scene
         else None,
     }
+
+
+def actor_available_knowledge_ids(game: StoredGame, actor_id: str) -> List[str]:
+    game = hydrate_daily_actor_state(game)
+    runtime_ids = [
+        item["id"]
+        for item in game.state["actor_runtime"][actor_id].get("knowledge", [])
+        if item.get("status", "active") == "active"
+    ]
+    document_ids = [
+        item["id"]
+        for item in game.state["documents"]
+        if item["author_id"] == actor_id or actor_id in item.get("recipient_ids", [])
+    ]
+    return list(dict.fromkeys(runtime_ids + document_ids + [item["id"] for item in PUBLIC_REFERENCE_MATERIALS]))
+
+
+def _public_person_profile(game: StoredGame, observer_id: str, target_id: str) -> Dict[str, Any]:
+    if target_id == "player":
+        return {
+            "id": "player",
+            "name": game.player_name,
+            "title": "岚州市委书记",
+            "public_position": "主持市委全面工作。",
+            "work_style": "依据亲历互动逐步判断。",
+            "organizational_relationship": "当前场景参与者",
+        }
+    actor = ACTORS[target_id]
+    return {
+        "id": target_id,
+        "name": actor["name"],
+        "title": actor["title"],
+        "public_position": actor["public_position"],
+        "work_style": actor["work_style"],
+        "organizational_relationship": "当前场景参与者",
+    }
+
+
+def _retrieve_actor_knowledge(runtime: Dict[str, Any], scene: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    participant_ids = {
+        item["actor_id"] for item in scene.get("participants", [])
+    } if scene else set()
+    active = [item for item in runtime.get("knowledge", []) if item.get("status", "active") == "active"]
+    ranked = sorted(
+        enumerate(active),
+        key=lambda pair: (
+            any(item in participant_ids for item in pair[1].get("related_actor_ids", [])),
+            pair[1].get("confidence") == "high",
+            pair[0],
+        ),
+        reverse=True,
+    )
+    return [deepcopy(item) for _, item in ranked[:14]]
+
+
+def _retrieve_actor_memories(runtime: Dict[str, Any], scene: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    participant_ids = {
+        item["actor_id"] for item in scene.get("participants", [])
+    } if scene else set()
+    memories = list(runtime.get("memories", []))
+    ranked = sorted(
+        enumerate(memories),
+        key=lambda pair: (
+            any(item in participant_ids for item in pair[1].get("related_actor_ids", [])),
+            int(pair[1].get("importance", 2)),
+            pair[0],
+        ),
+        reverse=True,
+    )
+    return [deepcopy(item) for _, item in ranked[:10]]
+
+
+def _retrieve_actor_tasks(runtime: Dict[str, Any]) -> List[Dict[str, Any]]:
+    tasks = [
+        item
+        for item in runtime.get("tasks", [])
+        if item.get("status") not in {"completed", "canceled"}
+    ]
+    priority = {"urgent": 4, "high": 3, "normal": 2, "low": 1}
+    ranked = sorted(
+        enumerate(tasks),
+        key=lambda pair: (priority.get(str(pair[1].get("priority", "normal")), 2), pair[0]),
+        reverse=True,
+    )
+    return [deepcopy(item) for _, item in ranked[:10]]
 
 
 def to_daily_game_view(game: StoredGame) -> DailyGameView:
@@ -1091,6 +1294,241 @@ def to_daily_game_view(game: StoredGame) -> DailyGameView:
     )
 
 
+def _apply_agent_tool_effects(
+    state: Dict[str, Any],
+    scene: Dict[str, Any],
+    actor_id: str,
+    effects: Sequence[AgentToolEffect],
+    *,
+    settlement: bool,
+) -> None:
+    allowed = {"create_document", "revise_document"}
+    if settlement:
+        allowed.update(
+            {
+                "record_memory",
+                "record_knowledge",
+                "record_todo",
+                "record_relationship_impression",
+                "record_commitment",
+                "contact_actor",
+                "request_information",
+                "propose_action",
+            }
+        )
+    for effect in effects:
+        if effect.kind not in allowed:
+            raise ValueError("人物 Agent 在当前阶段调用了未授权的写工具")
+        payload = effect.payload
+        if effect.kind == "create_document":
+            document_id = str(payload["document_id"])
+            if any(item["id"] == document_id for item in state["documents"]):
+                raise ValueError("人物 Agent 创建了重复文件 ID")
+            deliver_to_ids = list(dict.fromkeys(payload.get("deliver_to_ids", [])))
+            if any(item not in ACTORS and item != "player" for item in deliver_to_ids):
+                raise ValueError("人物 Agent 文件收件人无效")
+            state["documents"].append(
+                {
+                    "id": document_id,
+                    "version": 1,
+                    "title": str(payload["title"]),
+                    "document_type": str(payload["document_type"]),
+                    "author_id": actor_id,
+                    "status": "ready" if deliver_to_ids else "draft",
+                    "confidentiality": "内部",
+                    "created_date": state["current_date"],
+                    "due_date": None,
+                    "summary": str(payload["summary"]),
+                    "content": str(payload["content"]),
+                    "recipient_ids": list(dict.fromkeys([actor_id] + deliver_to_ids)),
+                    "source_document_ids": list(payload.get("source_document_ids", [])),
+                    "formal_effect": "人物工作草稿或就绪材料，未经相应签发和程序不形成正式决定。",
+                    "annotations": [],
+                    "handled_date": None,
+                }
+            )
+            _add_activity(
+                state,
+                "agent_file",
+                "{}形成工作材料".format(actor_label(actor_id)),
+                "《{}》{}。".format(
+                    payload["title"],
+                    "已送达玩家" if "player" in deliver_to_ids else "保存在其私人工作区",
+                ),
+                visible="player" in deliver_to_ids,
+            )
+            continue
+        if effect.kind == "revise_document":
+            document = _find_by_id(state["documents"], str(payload["document_id"]))
+            if document["author_id"] != actor_id or document["status"] not in {"draft", "returned", "ready"}:
+                raise ValueError("人物 Agent 无权修改这份文件")
+            document["summary"] = str(payload["summary"])
+            document["content"] = str(payload["content"])
+            document["version"] += 1
+            continue
+        if effect.kind == "record_knowledge":
+            state["actor_runtime"][actor_id]["knowledge"].append(
+                {
+                    "id": _new_id(state, "knowledge"),
+                    "claim": str(payload["claim"]),
+                    "source": {
+                        "type": payload.get("source_type", "inference"),
+                        "id": payload.get("source_id"),
+                    },
+                    "acquired_date": state["current_date"],
+                    "confidence": payload.get("confidence", "medium"),
+                    "kind": "dynamic",
+                    "status": "active",
+                    "related_actor_ids": list(payload.get("related_actor_ids", [])),
+                    "related_issue_ids": list(payload.get("related_issue_ids", [])),
+                }
+            )
+            continue
+        if effect.kind == "record_memory":
+            state["actor_runtime"][actor_id]["memories"].append(
+                {
+                    "id": _new_id(state, "memory"),
+                    "date": state["current_date"],
+                    "scene_id": scene["id"],
+                    "memory_type": payload.get("memory_type", "episodic"),
+                    "importance": int(payload.get("importance", 3)),
+                    "summary": str(payload["summary"]),
+                    "related_actor_ids": list(payload.get("related_actor_ids", [])),
+                    "related_issue_ids": list(payload.get("related_issue_ids", [])),
+                    "source_turn_ids": list(payload.get("source_turn_ids", [])),
+                }
+            )
+            continue
+        if effect.kind == "record_relationship_impression":
+            target_id = str(payload["target_id"])
+            relationship = state["actor_runtime"][actor_id]["relationships"].setdefault(
+                target_id,
+                {"score": 50, "last_updated": state["current_date"], "note": ""},
+            )
+            delta = 1 if payload.get("signal") == "improved" else -1 if payload.get("signal") == "strained" else 0
+            relationship["score"] = max(0, min(100, int(relationship.get("score", 50)) + delta))
+            relationship["last_updated"] = state["current_date"]
+            relationship["note"] = str(payload["note"])
+            relationship["related_issue_id"] = payload.get("related_issue_id")
+            continue
+        if effect.kind == "record_todo":
+            state["actor_runtime"][actor_id]["tasks"].append(
+                {
+                    "id": _new_id(state, "todo"),
+                    "date": state["current_date"],
+                    "scene_id": scene["id"],
+                    "summary": str(payload["summary"]),
+                    "due_date": payload.get("due_date"),
+                    "priority": payload.get("priority", "normal"),
+                    "requires_formal_decision": bool(payload.get("requires_formal_decision", False)),
+                    "related_actor_ids": list(payload.get("related_actor_ids", [])),
+                    "related_issue_ids": list(payload.get("related_issue_ids", [])),
+                    "status": (
+                        "awaiting_formal_decision"
+                        if payload.get("requires_formal_decision")
+                        else "planned"
+                    ),
+                }
+            )
+            continue
+        if effect.kind == "record_commitment":
+            visibility = str(payload.get("visibility", "private"))
+            scene_people = [item["actor_id"] for item in scene["participants"]]
+            if visibility == "public":
+                known_by_ids = ["player"] + list(ACTORS)
+            elif visibility in {"participants", "internal"}:
+                known_by_ids = scene_people
+            else:
+                known_by_ids = [str(payload["giver_id"]), str(payload["receiver_id"])]
+            state["commitments"].append(
+                {
+                    "id": _new_id(state, "commitment"),
+                    "created_date": state["current_date"],
+                    "scene_id": scene["id"],
+                    "commitment_type": payload.get("commitment_type", "instruction"),
+                    "giver_id": str(payload["giver_id"]),
+                    "receiver_id": str(payload["receiver_id"]),
+                    "summary": str(payload["summary"]),
+                    "condition": payload.get("condition"),
+                    "due_date": payload.get("due_date"),
+                    "visibility": visibility,
+                    "requires_formal_decision": bool(payload.get("requires_formal_decision", False)),
+                    "formal_effect": "pending" if payload.get("requires_formal_decision") else "informal",
+                    "status": "open",
+                    "known_by_ids": list(dict.fromkeys(known_by_ids)),
+                }
+            )
+            continue
+        if effect.kind == "contact_actor":
+            target_id = str(payload["target_id"])
+            _add_activity(
+                state,
+                "agent_contact",
+                "{}会后联络{}".format(actor_label(actor_id), actor_label(target_id)),
+                str(payload["summary"]),
+                visible=False,
+            )
+            state["actor_runtime"][target_id]["memories"].append(
+                {
+                    "id": _new_id(state, "memory"),
+                    "date": state["current_date"],
+                    "scene_id": scene["id"],
+                    "memory_type": "message",
+                    "importance": 2,
+                    "summary": "{}会后联系：{}".format(actor_label(actor_id), payload["summary"]),
+                    "related_actor_ids": [actor_id],
+                    "related_issue_ids": [],
+                    "source_turn_ids": [],
+                }
+            )
+            continue
+        if effect.kind == "request_information":
+            target_id = str(payload["target_id"])
+            due = (_parse_date(state["current_date"]) + timedelta(days=1)).isoformat()
+            state["document_tasks"].append(
+                {
+                    "id": _new_id(state, "task"),
+                    "author_id": target_id,
+                    "title": payload.get("title") or "会后信息核实材料",
+                    "document_type": "briefing",
+                    "instructions": "{}请求核实：{}".format(actor_label(actor_id), payload["summary"]),
+                    "source_document_ids": [],
+                    "created_date": state["current_date"],
+                    "due_date": due,
+                    "status": "queued",
+                    "scene_id": scene["id"],
+                }
+            )
+            state["actor_runtime"][target_id]["workload"] += 1
+            continue
+        if effect.kind == "propose_action":
+            state["actor_runtime"][actor_id]["tasks"].append(
+                {
+                    "id": _new_id(state, "todo"),
+                    "date": state["current_date"],
+                    "scene_id": scene["id"],
+                    "summary": str(payload["summary"]),
+                    "action_type": str(payload["action_type"]),
+                    "target_ids": list(payload.get("target_ids", [])),
+                    "due_date": payload.get("due_date"),
+                    "priority": "normal",
+                    "requires_formal_decision": bool(payload.get("requires_formal_decision", False)),
+                    "status": (
+                        "awaiting_formal_decision"
+                        if payload.get("requires_formal_decision")
+                        else "planned"
+                    ),
+                }
+            )
+            if payload.get("requires_formal_decision"):
+                _add_notification(
+                    state,
+                    "会后行动建议待决",
+                    "{}建议：{}。该事项尚未获得正式效力。".format(actor_label(actor_id), payload["summary"]),
+                    "neutral",
+                )
+
+
 def _settle_scene(
     game: StoredGame,
     scene: Dict[str, Any],
@@ -1105,15 +1543,34 @@ def _settle_scene(
     results = post_scene_results or {}
     memory = "{}：{}".format(scene["title"], _shorten(transcript_text.replace("\n", " "), 220))
     for actor_id in npc_ids:
-        state["actor_runtime"][actor_id]["memories"].append(
-            {
-                "date": state["current_date"],
-                "scene_id": scene["id"],
-                "summary": results[actor_id].memory if actor_id in results else memory,
-            }
-        )
         if actor_id in results:
-            _apply_post_scene_intents(state, scene, actor_id, results[actor_id])
+            result = results[actor_id]
+            _apply_agent_tool_effects(
+                state,
+                scene,
+                actor_id,
+                result.tool_effects,
+                settlement=True,
+            )
+            if not any(effect.kind == "record_memory" for effect in result.tool_effects):
+                state["actor_runtime"][actor_id]["memories"].append(
+                    _fallback_memory(state, scene, result.memory)
+                )
+            _apply_post_scene_intents(state, scene, actor_id, result)
+            if result.relationship_signal == "improved":
+                state["relations"][actor_id] = min(100, int(state["relations"][actor_id]) + 1)
+            elif result.relationship_signal == "strained":
+                state["relations"][actor_id] = max(0, int(state["relations"][actor_id]) - 1)
+            player_relationship = state["actor_runtime"][actor_id]["relationships"].setdefault(
+                "player",
+                {"score": 50, "last_updated": state["current_date"], "note": ""},
+            )
+            player_relationship["score"] = state["relations"][actor_id]
+            player_relationship["last_updated"] = state["current_date"]
+        else:
+            state["actor_runtime"][actor_id]["memories"].append(
+                _fallback_memory(state, scene, memory)
+            )
     if scene["kind"] == "meeting":
         secretary_present = "secretary_general" in npc_ids
         if secretary_present:
@@ -1175,6 +1632,20 @@ def _settle_scene(
             )
     if resolution:
         _add_activity(state, "resolution", "场景结论", resolution.strip())
+
+
+def _fallback_memory(state: Dict[str, Any], scene: Dict[str, Any], summary: str) -> Dict[str, Any]:
+    return {
+        "id": _new_id(state, "memory"),
+        "date": state["current_date"],
+        "scene_id": scene["id"],
+        "memory_type": "episodic",
+        "importance": 3,
+        "summary": summary,
+        "related_actor_ids": [item["actor_id"] for item in scene["participants"]],
+        "related_issue_ids": [],
+        "source_turn_ids": [item["id"] for item in scene["transcript"][-12:]],
+    }
 
 
 def _apply_post_scene_intents(
@@ -1775,8 +2246,12 @@ def _standing_committee_present_count(participant_ids: Sequence[str]) -> int:
     )
 
 
-def _validate_used_beliefs(actor_id: str, used_belief_ids: Sequence[str]) -> None:
-    allowed = set(actor_knowledge_ids(actor_id))
+def _validate_used_beliefs(
+    game: StoredGame,
+    actor_id: str,
+    used_belief_ids: Sequence[str],
+) -> None:
+    allowed = set(actor_available_knowledge_ids(game, actor_id))
     if not set(used_belief_ids).issubset(allowed):
         raise ValueError("人物 Agent 引用了其认知范围外的信息")
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -323,9 +323,50 @@ class SpeechIntent(BaseModel):
     urgency: Literal["low", "normal", "high"] = "normal"
 
 
+class AgentToolCall(BaseModel):
+    call_id: str = Field(min_length=1, max_length=80)
+    name: Literal[
+        "list_contacts",
+        "list_visible_files",
+        "read_file",
+        "write_file",
+        "revise_file",
+        "list_memories",
+        "list_scene_records",
+        "read_scene_record",
+        "list_todos",
+        "record_knowledge",
+        "record_memory",
+        "record_todo",
+        "record_relationship_impression",
+        "record_commitment",
+        "contact_actor",
+        "request_information",
+        "propose_action",
+    ]
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentToolEffect(BaseModel):
+    kind: Literal[
+        "create_document",
+        "revise_document",
+        "record_knowledge",
+        "record_memory",
+        "record_todo",
+        "record_relationship_impression",
+        "record_commitment",
+        "contact_actor",
+        "request_information",
+        "propose_action",
+    ]
+    payload: Dict[str, Any]
+
+
 class AgentUtterance(BaseModel):
     text: str = Field(min_length=1, max_length=2400)
     used_belief_ids: List[str] = Field(default_factory=list, max_length=12)
+    tool_effects: List[AgentToolEffect] = Field(default_factory=list, max_length=8)
 
 
 class PostSceneIntent(BaseModel):
@@ -340,6 +381,8 @@ class PostSceneIntent(BaseModel):
 class PostSceneResult(BaseModel):
     memory: str = Field(min_length=1, max_length=600)
     intents: List[PostSceneIntent] = Field(default_factory=list, max_length=2)
+    relationship_signal: Literal["improved", "unchanged", "strained"] = "unchanged"
+    tool_effects: List[AgentToolEffect] = Field(default_factory=list, max_length=8)
 
 
 class SuperiorReaction(BaseModel):
