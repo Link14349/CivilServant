@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .daily_models import AgentToolCall, AgentToolEffect
 from .daily_scenario import (
@@ -36,19 +36,13 @@ class _FileReadArgs(_ToolArgs):
 
 class _FileWriteArgs(_ToolArgs):
     title: str = Field(min_length=2, max_length=160)
-    document_type: str = Field(default="briefing", max_length=48)
+    document_type: Literal["report", "briefing", "request", "meeting_material", "note", "draft"] = (
+        "briefing"
+    )
     summary: str = Field(min_length=2, max_length=400)
     content: str = Field(min_length=2, max_length=8000)
     source_document_ids: List[str] = Field(default_factory=list, max_length=12)
     deliver_to_ids: List[str] = Field(default_factory=list, max_length=8)
-
-    @field_validator("document_type")
-    @classmethod
-    def validate_document_type(cls, value: str) -> str:
-        allowed = {"report", "briefing", "request", "meeting_material", "note", "draft"}
-        if value not in allowed:
-            raise ValueError("不支持的文件类型")
-        return value
 
 
 class _FileReviseArgs(_ToolArgs):
@@ -85,80 +79,40 @@ class _MemoryWriteArgs(_ToolArgs):
 
 class _KnowledgeWriteArgs(_ToolArgs):
     claim: str = Field(min_length=2, max_length=800)
-    source_type: str = Field(max_length=32)
+    source_type: Literal["transcript", "document", "observation", "hearsay", "inference"]
     source_id: Optional[str] = Field(default=None, max_length=160)
-    confidence: str = Field(default="medium", max_length=16)
+    confidence: Literal["low", "medium", "high"] = "medium"
     related_actor_ids: List[str] = Field(default_factory=list, max_length=12)
     related_issue_ids: List[str] = Field(default_factory=list, max_length=12)
-
-    @field_validator("source_type")
-    @classmethod
-    def validate_source_type(cls, value: str) -> str:
-        if value not in {"transcript", "document", "observation", "hearsay", "inference"}:
-            raise ValueError("未知的信息来源类型")
-        return value
-
-    @field_validator("confidence")
-    @classmethod
-    def validate_confidence(cls, value: str) -> str:
-        if value not in {"low", "medium", "high"}:
-            raise ValueError("未知的置信度")
-        return value
 
 
 class _RelationshipArgs(_ToolArgs):
     target_id: str = Field(min_length=1, max_length=128)
-    signal: str = Field(max_length=16)
+    signal: Literal["improved", "unchanged", "strained"]
     note: str = Field(min_length=2, max_length=400)
     related_issue_id: Optional[str] = Field(default=None, max_length=128)
-
-    @field_validator("signal")
-    @classmethod
-    def validate_signal(cls, value: str) -> str:
-        if value not in {"improved", "unchanged", "strained"}:
-            raise ValueError("未知的关系变化信号")
-        return value
 
 
 class _TodoWriteArgs(_ToolArgs):
     summary: str = Field(min_length=2, max_length=500)
     due_date: Optional[str] = Field(default=None, max_length=10)
-    priority: str = Field(default="normal", max_length=16)
+    priority: Literal["low", "normal", "high", "urgent"] = "normal"
     requires_formal_decision: bool = False
     related_actor_ids: List[str] = Field(default_factory=list, max_length=12)
     related_issue_ids: List[str] = Field(default_factory=list, max_length=12)
 
-    @field_validator("priority")
-    @classmethod
-    def validate_priority(cls, value: str) -> str:
-        if value not in {"low", "normal", "high", "urgent"}:
-            raise ValueError("未知的待办优先级")
-        return value
-
 
 class _CommitmentArgs(_ToolArgs):
-    commitment_type: str = Field(default="instruction", max_length=32)
+    commitment_type: Literal["instruction", "promise", "conditional_exchange", "reporting_duty"] = (
+        "instruction"
+    )
     giver_id: str = Field(min_length=1, max_length=128)
     receiver_id: str = Field(min_length=1, max_length=128)
     summary: str = Field(min_length=2, max_length=600)
     condition: Optional[str] = Field(default=None, max_length=400)
     due_date: Optional[str] = Field(default=None, max_length=10)
-    visibility: str = Field(default="private", max_length=32)
+    visibility: Literal["private", "participants", "internal", "public"] = "private"
     requires_formal_decision: bool = False
-
-    @field_validator("commitment_type")
-    @classmethod
-    def validate_commitment_type(cls, value: str) -> str:
-        if value not in {"instruction", "promise", "conditional_exchange", "reporting_duty"}:
-            raise ValueError("未知的承诺类型")
-        return value
-
-    @field_validator("visibility")
-    @classmethod
-    def validate_visibility(cls, value: str) -> str:
-        if value not in {"private", "participants", "internal", "public"}:
-            raise ValueError("未知的知情范围")
-        return value
 
 
 class _ContactArgs(_ToolArgs):
@@ -199,22 +153,28 @@ def agent_tool_catalog(phase: str) -> List[Dict[str, Any]]:
             [
                 _tool(
                     "record_knowledge",
-                    "把本场景中新获得、推断或听说的一项信息写入动态认知，并保留来源与置信度。",
+                    "把本场景中新获得、推断或听说的一项信息写入动态认知，并保留来源与置信度。"
+                    "source_type 取值：transcript（本场景或亲历归档中的发言原文，source_id 填对应 turn_id）、"
+                    "document（来自可见文件，source_id 填文件 id）、observation（本人亲历观察，source_id 填对应发言 turn_id）、"
+                    "hearsay（从某次发言转述得知，可填对应 turn_id 也可不填）、inference（本人推断，不填 source_id）。",
                     _KnowledgeWriteArgs,
                 ),
                 _tool(
                     "record_memory",
-                    "把本次亲历形成的私人记忆写入自己的记忆库。",
+                    "把本次亲历形成的私人记忆写入自己的记忆库。related_issue_ids 只能填上下文中 issues 列表里的 id，"
+                    "没有对应议题就不要填。",
                     _MemoryWriteArgs,
                 ),
                 _tool(
                     "record_todo",
-                    "记录本人准备跟进的待办，不自动取得正式决策效力。",
+                    "记录本人准备跟进的待办，不自动取得正式决策效力。related_issue_ids 只能填上下文中 issues 列表里的 id，"
+                    "没有对应议题就不要填。",
                     _TodoWriteArgs,
                 ),
                 _tool(
                     "record_relationship_impression",
-                    "记录本人物对一名亲历对象的工作关系印象变化；只改变本人物的主观看法。",
+                    "记录本人物对一名亲历对象的工作关系印象变化；只改变本人物的主观看法。"
+                    "related_issue_id 只能填上下文中 issues 列表里的 id，没有对应议题就不要填。",
                     _RelationshipArgs,
                 ),
                 _tool(

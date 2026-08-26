@@ -132,6 +132,28 @@ export function addMeetingMaterials(
   );
 }
 
+export function setMeetingDiscussionMode(
+  game: Game,
+  credentials: Credentials,
+  mode: DiscussionMode,
+): Promise<Game> {
+  if (!game.active_scene || game.active_scene.kind !== "meeting") {
+    throw new Error("当前没有会议场景。");
+  }
+  return request<Game>(
+    `/api/games/${game.id}/scenes/${game.active_scene.id}/discussion-mode`,
+    {
+      method: "POST",
+      headers: headers(game, credentials),
+      body: JSON.stringify({
+        ...command(game),
+        record_version: game.active_scene.record_version,
+        discussion_mode: mode,
+      }),
+    },
+  );
+}
+
 export function startFieldVisit(
   game: Game,
   credentials: Credentials,

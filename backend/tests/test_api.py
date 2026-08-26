@@ -208,6 +208,41 @@ def test_meeting_api_distributes_preselected_and_temporary_materials(monkeypatch
     assert "临时向全体与会者发送" in updated["active_scene"]["transcript"][-1]["text"]
 
 
+def test_meeting_api_can_switch_discussion_mode(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    game = _new_game(client)
+    response = client.post(
+        "/api/games/{}/meetings".format(game["id"]),
+        json=_command(
+            game,
+            suffix="meeting-mode-switch",
+            meeting_type="coordination",
+            discussion_mode="chaired",
+            title="防汛协调会",
+            agenda="核对险段与物资准备",
+            participant_ids=["mayor", "water_director"],
+        ),
+    )
+    assert response.status_code == 200
+    game = response.json()
+    scene = game["active_scene"]
+    assert scene["discussion_mode"] == "chaired"
+
+    response = client.post(
+        "/api/games/{}/scenes/{}/discussion-mode".format(game["id"], scene["id"]),
+        json=_command(
+            game,
+            suffix="switch-to-free",
+            record_version=scene["record_version"],
+            discussion_mode="free",
+        ),
+    )
+    assert response.status_code == 200
+    updated = response.json()
+    assert updated["active_scene"]["discussion_mode"] == "free"
+    assert "自由磋商" in updated["active_scene"]["transcript"][-1]["text"]
+
+
 def test_template_conversation_is_continuous_and_uses_one_action_point(monkeypatch) -> None:
     with _client(monkeypatch) as client:
         game = _new_game(client)

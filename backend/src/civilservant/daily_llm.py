@@ -94,8 +94,10 @@ class DailyAgentProvider:
             phase="interaction",
             task="meeting_utterance",
             instruction=(
-                "你已经获得发言权。结合当前会议记录作一段简洁、有职务立场的发言。"
-                "如果需要核对文件或本人记录，必须先调用相应工具。"
+                "你已经获得发言权。结合当前会议记录与本人已知信息作一段简洁、有职务立场的发言。"
+                "会议记录、参会人员、联系人名单、可见文件与本人记忆都已包含在上下文中，不要重复检索。"
+                "只有当你确实需要核对某份文件的正文，或确认某位与会者的具体职务关系时，才调用相应工具；"
+                "信息足够时立即调用 submit_final_result 提交发言，不要无谓地反复调用 list_contacts 等检索工具。"
             ),
             task_input={},
             final_schema={
@@ -842,8 +844,13 @@ class DailyAgentProvider:
 
     @staticmethod
     def _validate_beliefs(game: StoredGame, actor_id: str, result: AgentUtterance) -> None:
-        if not set(result.used_belief_ids).issubset(set(actor_available_knowledge_ids(game, actor_id))):
-            raise LlmError("人物 Agent 引用了其认知范围外的信息，输出已拒绝。")
+        allowed = set(actor_available_knowledge_ids(game, actor_id))
+        offending = sorted(set(result.used_belief_ids) - allowed)
+        if offending:
+            raise LlmError(
+                "人物 Agent 引用了其认知范围外的信息，输出已拒绝"
+                "（越界引用：{}）。".format("、".join(offending))
+            )
 
 
 def _read_prompt(path: Path) -> str:
@@ -983,11 +990,14 @@ def _fallback_agent_output(
     on_trace: Optional[Callable[[Dict[str, Any]], None]],
     reason: str,
 ) -> Any:
+    # 收敛失败时保留已 staged 的写工具效果，避免模型跑完后已形成的记忆/待办/认知被整体丢弃。
+    # 结果模型的 tool_effects 有 max_length=8 上限，超出部分只能舍弃，优先保留先写入的。
+    preserved = staged_effects[:8]
     if output_model is AgentUtterance:
         result: BaseModel = AgentUtterance(
             text="这件事我还需要进一步核实，暂时不能给出可靠答复。",
             used_belief_ids=[],
-            tool_effects=[],
+            tool_effects=preserved,
         )
         if on_text_update:
             on_text_update(result.text)  # type: ignore[attr-defined]
@@ -996,7 +1006,7 @@ def _fallback_agent_output(
             memory="本次场景已经结束，但暂未形成足够可靠的新增判断。",
             relationship_signal="unchanged",
             intents=[],
-            tool_effects=[],
+            tool_effects=preserved,
         )
     else:
         raise LlmError("人物 Agent 未能收敛：{}".format(reason))
@@ -1011,7 +1021,8 @@ def _fallback_agent_output(
             "payload": {
                 "task": task,
                 "reason": reason,
-                "discarded_staged_effect_count": len(staged_effects),
+                "preserved_staged_effect_count": len(preserved),
+                "discarded_staged_effect_count": len(staged_effects) - len(preserved),
                 "result": result.model_dump(mode="json"),
             },
         },

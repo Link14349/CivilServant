@@ -3,6 +3,7 @@ import pytest
 from civilservant.daily_engine import (
     add_meeting_materials,
     actor_agent_projection,
+    actor_available_knowledge_ids,
     add_conversation_reply,
     add_player_speech,
     begin_conversation_generation,
@@ -16,6 +17,7 @@ from civilservant.daily_engine import (
     create_notebook_note,
     hydrate_daily_actor_state,
     schedule_calendar_entry,
+    set_meeting_discussion_mode,
     start_conversation,
     start_field_visit,
     start_meeting,
@@ -227,6 +229,138 @@ def test_player_can_send_additional_file_during_meeting() -> None:
             record_version=scene["record_version"],
             document_ids=["doc-fiscal-note"],
         )
+
+
+def test_player_can_switch_discussion_mode_during_meeting() -> None:
+    current = start_meeting(
+        game(),
+        idempotency_key="start-meeting-mode-switch",
+        meeting_type="symposium",
+        discussion_mode="chaired",
+        title="北山产业座谈会",
+        agenda="核实就业和资产条件",
+        participant_ids=["mayor", "county_secretary"],
+    )
+    scene = current.state["active_scene"]
+    previous_record_version = scene["record_version"]
+    current = set_meeting_discussion_mode(
+        current,
+        idempotency_key="switch-to-free",
+        record_version=previous_record_version,
+        discussion_mode="free",
+    )
+    scene = current.state["active_scene"]
+    assert scene["discussion_mode"] == "free"
+    assert scene["record_version"] == previous_record_version + 1
+    assert "自由磋商" in scene["transcript"][-1]["text"]
+    # free mode no longer requires a nomination; it picks a speaker or falls silent
+    current, selected = begin_meeting_generation(
+        current,
+        idempotency_key="free-round",
+        record_version=scene["record_version"],
+        nominated_actor_id=None,
+    )
+    assert selected is None or selected in {"mayor", "county_secretary"}
+
+
+def test_cannot_switch_discussion_mode_while_speech_is_generating() -> None:
+    current = start_meeting(
+        game(),
+        idempotency_key="start-meeting-locked-switch",
+        meeting_type="symposium",
+        discussion_mode="chaired",
+        title="北山产业座谈会",
+        agenda="核实就业和资产条件",
+        participant_ids=["mayor", "county_secretary"],
+    )
+    scene = current.state["active_scene"]
+    current, _ = begin_meeting_generation(
+        current,
+        idempotency_key="nominate-mayor",
+        record_version=scene["record_version"],
+        nominated_actor_id="mayor",
+    )
+    scene = current.state["active_scene"]
+    assert scene["generation"]["status"] == "thinking"
+    with pytest.raises(ValueError, match="生成"):
+        set_meeting_discussion_mode(
+            current,
+            idempotency_key="switch-during-thinking",
+            record_version=scene["record_version"],
+            discussion_mode="free",
+        )
+
+
+def test_available_knowledge_includes_own_commitments_memories_tasks_and_records() -> None:
+    current = game()
+    state = current.state
+    state.setdefault("commitments", []).append(
+        {
+            "id": "commitment-146",
+            "summary": "水利局会同南川区明天提交修改后的正式稿",
+            "giver_id": "secretary_general",
+            "receiver_id": "water_director",
+            "known_by_ids": ["secretary_general", "water_director"],
+            "status": "active",
+        }
+    )
+    state["actor_runtime"]["secretary_general"]["memories"].append(
+        {"id": "memory-3", "summary": "上次谈话提到资金缺口", "importance": 3}
+    )
+    state["actor_runtime"]["secretary_general"]["tasks"].append(
+        {"id": "todo-9", "summary": "跟进险段复核", "status": "planned"}
+    )
+    state.setdefault("scene_archive", []).append(
+        {
+            "id": "scene-7",
+            "kind": "meeting",
+            "participants": [{"actor_id": "secretary_general"}, {"actor_id": "mayor"}],
+            "title": "上次协调会",
+            "transcript": [{"id": "turn-77", "speaker_id": "mayor", "text": "资金要核实。"}],
+            "meeting_materials": [],
+        }
+    )
+    state["documents"].append(
+        {
+            "id": "doc-for-sg",
+            "version": 1,
+            "title": "复核纪要",
+            "document_type": "report",
+            "author_id": "water_director",
+            "author_label": "水务局",
+            "status": "received",
+            "confidentiality": "内部",
+            "created_date": state["current_date"],
+            "due_date": None,
+            "summary": "纪要",
+            "content": "正文",
+            "recipient_ids": ["secretary_general"],
+            "source_document_ids": ["doc-county-request"],
+            "formal_effect": "供参考",
+            "annotations": [],
+        }
+    )
+    allowed = set(actor_available_knowledge_ids(current, "secretary_general"))
+    # 本人承诺/记忆/待办/亲历场景记录/转写轮次/实体引用/文件引用来源都应放行
+    assert {
+        "commitment-146",
+        "memory-3",
+        "todo-9",
+        "scene-7",
+        "turn-77",
+        "mayor",
+        "water_director",
+        "system",
+        "secretary_general",
+        "doc-for-sg",
+        "doc-county-request",
+    }.issubset(allowed)
+    # 角色私有的承诺/记忆/文件及其引用来源不应进入其他人的允许集合
+    mayor_allowed = set(actor_available_knowledge_ids(current, "mayor"))
+    assert "commitment-146" not in mayor_allowed
+    assert "memory-3" not in mayor_allowed
+    assert "doc-for-sg" not in mayor_allowed
+    assert "doc-county-request" not in mayor_allowed
 
 
 def test_player_cannot_distribute_a_document_they_cannot_access() -> None:

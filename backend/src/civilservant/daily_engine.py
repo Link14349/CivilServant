@@ -551,6 +551,40 @@ def add_meeting_materials(
     return _finish_command(updated, idempotency_key)
 
 
+def set_meeting_discussion_mode(
+    game: StoredGame,
+    *,
+    idempotency_key: str,
+    record_version: int,
+    discussion_mode: str,
+) -> StoredGame:
+    _require_active_scene(game)
+    scene = game.state["active_scene"]
+    if scene["kind"] != "meeting":
+        raise ValueError("当前不是会议场景")
+    if int(scene["record_version"]) != record_version:
+        raise ValueError("会议记录已经更新，请刷新后重试")
+    if discussion_mode not in {"free", "chaired"}:
+        raise ValueError("未知的讨论方式")
+    if scene["generation"]["status"] == "thinking":
+        raise ValueError("仍有发言正在生成，请先打断或等待")
+    if scene.get("discussion_mode") == discussion_mode:
+        return _finish_command(game, idempotency_key)
+    updated = game.model_copy(deep=True)
+    updated_scene = updated.state["active_scene"]
+    updated_scene["discussion_mode"] = discussion_mode
+    _append_transcript(
+        updated_scene,
+        "system",
+        "会议记录",
+        "system",
+        "主持人将会议讨论方式调整为{}。".format(
+            "自由磋商" if discussion_mode == "free" else "主持磋商"
+        ),
+    )
+    return _finish_command(updated, idempotency_key)
+
+
 def start_field_visit(
     game: StoredGame,
     *,
@@ -1298,6 +1332,10 @@ def actor_agent_projection(game: StoredGame, actor_id: str) -> Dict[str, Any]:
         "date": state["current_date"],
         "actor": context,
         "known_people": known_people,
+        "issues": [
+            {"id": item["id"], "title": item["title"]}
+            for item in state.get("issues", [])
+        ],
         "public_background": deepcopy(PUBLIC_REFERENCE_MATERIALS),
         "relationship_to_player": _relationship_band(int(state["relations"][actor_id])),
         "knowledge": _retrieve_actor_knowledge(runtime, scene),
@@ -1327,9 +1365,10 @@ def actor_agent_projection(game: StoredGame, actor_id: str) -> Dict[str, Any]:
 
 def actor_available_knowledge_ids(game: StoredGame, actor_id: str) -> List[str]:
     game = hydrate_daily_actor_state(game)
+    runtime = game.state["actor_runtime"][actor_id]
     runtime_ids = [
         item["id"]
-        for item in game.state["actor_runtime"][actor_id].get("knowledge", [])
+        for item in runtime.get("knowledge", [])
         if item.get("status", "active") == "active"
     ]
     document_ids = [
@@ -1346,7 +1385,67 @@ def actor_available_knowledge_ids(game: StoredGame, actor_id: str) -> List[str]:
             for item in scene.get("meeting_materials", [])
             if actor_id in item.get("audience_ids", [])
         )
-    return list(dict.fromkeys(runtime_ids + document_ids + [item["id"] for item in PUBLIC_REFERENCE_MATERIALS]))
+    # 角色可读文件中的引用来源 id 会在 read_file 结果里一并呈现，放行以免误伤。
+    document_ids.extend(
+        source_id
+        for document in game.state["documents"]
+        if actor_id == document["author_id"] or actor_id in document.get("recipient_ids", [])
+        for source_id in document.get("source_document_ids", [])
+    )
+    # 角色自己的承诺、记忆、待办与亲历过的场景记录，都是其在上下文中合法可见的事实依据，
+    # 也纳入允许集合，避免把合法引用误判为越界。
+    commitment_ids = [
+        item["id"]
+        for item in game.state.get("commitments", [])
+        if actor_id in item.get("known_by_ids", [])
+        or actor_id in {item.get("giver_id"), item.get("receiver_id")}
+    ]
+    memory_ids = [item["id"] for item in runtime.get("memories", [])]
+    task_ids = [item["id"] for item in runtime.get("tasks", [])]
+    scene_record_ids = [
+        item["id"]
+        for item in game.state.get("scene_archive", [])
+        if actor_id in {participant["actor_id"] for participant in item["participants"]}
+    ]
+    # 转写轮次 id：当前场景与亲历归档里的每一轮发言，角色都亲眼看到，可合法引用。
+    turn_ids: List[str] = []
+    if scene and actor_id in {item["actor_id"] for item in scene["participants"]}:
+        turn_ids.extend(item["id"] for item in scene.get("transcript", []))
+    for archived in game.state.get("scene_archive", []):
+        if actor_id in {item["actor_id"] for item in archived["participants"]}:
+            turn_ids.extend(item["id"] for item in archived.get("transcript", []))
+    # 人物/实体 id：认识名单、当前场景与会者、承诺相对方与本人，都是公开身份或本人在场对象，
+    # 不属于需要隔离的信息，纳入以免把对人物的合法引用误判为越界。
+    entity_ids = list(actor_acquaintance_ids(actor_id))
+    if scene:
+        entity_ids.extend(item["actor_id"] for item in scene["participants"])
+    entity_ids.extend(
+        item.get("giver_id")
+        for item in game.state.get("commitments", [])
+        if actor_id in item.get("known_by_ids", [])
+        or actor_id in {item.get("giver_id"), item.get("receiver_id")}
+    )
+    entity_ids.extend(
+        item.get("receiver_id")
+        for item in game.state.get("commitments", [])
+        if actor_id in item.get("known_by_ids", [])
+        or actor_id in {item.get("giver_id"), item.get("receiver_id")}
+    )
+    entity_ids.append(actor_id)
+    entity_ids.append("system")
+    return list(
+        dict.fromkeys(
+            runtime_ids
+            + document_ids
+            + commitment_ids
+            + memory_ids
+            + task_ids
+            + scene_record_ids
+            + turn_ids
+            + [item for item in entity_ids if item]
+            + [item["id"] for item in PUBLIC_REFERENCE_MATERIALS]
+        )
+    )
 
 
 def _public_person_profile(game: StoredGame, observer_id: str, target_id: str) -> Dict[str, Any]:
@@ -2604,8 +2703,9 @@ def _validate_used_beliefs(
     used_belief_ids: Sequence[str],
 ) -> None:
     allowed = set(actor_available_knowledge_ids(game, actor_id))
-    if not set(used_belief_ids).issubset(allowed):
-        raise ValueError("人物 Agent 引用了其认知范围外的信息")
+    offending = sorted(set(used_belief_ids) - allowed)
+    if offending:
+        raise ValueError("人物 Agent 引用了其认知范围外的信息（越界引用：{}）".format("、".join(offending)))
 
 
 def _validate_actor_ids(actor_ids: Sequence[str]) -> None:

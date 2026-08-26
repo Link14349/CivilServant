@@ -469,6 +469,67 @@ def test_repeated_invalid_final_uses_safe_spoken_fallback() -> None:
     assert traces[-1]["kind"] == "safe_fallback"
 
 
+class _StageThenInvalidFinalProvider(DailyAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.call_index = 0
+
+    def _post_chat(self, api_key, game, body):
+        self.call_index += 1
+        if self.call_index == 1:
+            arguments = {"summary": "书记要求先测算资金边界，不先作资金承诺。"}
+            name = "record_memory"
+        else:
+            arguments = {"text": ""}
+            name = "submit_final_result"
+        return {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call-stage-{}".format(self.call_index),
+                                "type": "function",
+                                "function": {"name": name, "arguments": json.dumps(arguments)},
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+
+
+def test_settlement_fallback_preserves_staged_memory_effects() -> None:
+    """修复回归：模型结算失败触发 safe_fallback 时，已 staged 的记忆必须保留，不能整体丢弃。"""
+    current = game(mode="live")
+    current = start_conversation(
+        current,
+        idempotency_key="start-settlement-fallback",
+        actor_id="mayor",
+        channel="private_meeting",
+        opening="请先测算资金边界，暂不作承诺。",
+    )
+    traces = []
+    result = _StageThenInvalidFinalProvider().resolve_post_scene(
+        api_key="test-key",
+        game=current,
+        actor_id="mayor",
+        on_trace=traces.append,
+    )
+    assert traces[-1]["kind"] == "safe_fallback"
+    fallback = traces[-1]["payload"]
+    assert fallback["preserved_staged_effect_count"] == 1
+    assert fallback["discarded_staged_effect_count"] == 0
+    assert any(
+        effect.kind == "record_memory"
+        and effect.payload["summary"] == "书记要求先测算资金边界，不先作资金承诺。"
+        for effect in result.tool_effects
+    )
+
+
 class _UniqueUntilForcedProvider(DailyAgentProvider):
     def __init__(self) -> None:
         super().__init__()
@@ -782,3 +843,47 @@ def test_deepseek_sse_tool_arguments_are_reassembled_and_exposed_as_text(monkeyp
     assert tool_call["function"]["name"] == "submit_final_result"
     assert json.loads(tool_call["function"]["arguments"])["text"] == "岚州逐字"
     assert updates == ["岚州逐", "岚州逐字"]
+
+
+def test_settlement_tool_schema_exposes_enums_to_model() -> None:
+    """修复回归：合法取值必须以 enum 形式暴露给模型，否则模型只会猜错 source_type 等字段。"""
+    from civilservant.daily_agent_tools import agent_tool_catalog
+
+    by_name = {
+        item["function"]["name"]: item["function"]["parameters"].get("properties", {})
+        for item in agent_tool_catalog("settlement")
+    }
+    assert by_name["record_knowledge"]["source_type"]["enum"] == [
+        "transcript",
+        "document",
+        "observation",
+        "hearsay",
+        "inference",
+    ]
+    assert by_name["record_knowledge"]["confidence"]["enum"] == ["low", "medium", "high"]
+    assert by_name["record_todo"]["priority"]["enum"] == ["low", "normal", "high", "urgent"]
+    assert by_name["record_relationship_impression"]["signal"]["enum"] == [
+        "improved",
+        "unchanged",
+        "strained",
+    ]
+    assert by_name["record_commitment"]["commitment_type"]["enum"] == [
+        "instruction",
+        "promise",
+        "conditional_exchange",
+        "reporting_duty",
+    ]
+    assert by_name["record_commitment"]["visibility"]["enum"] == [
+        "private",
+        "participants",
+        "internal",
+        "public",
+    ]
+
+
+def test_actor_projection_exposes_issue_ids_for_reference() -> None:
+    """修复回归：上下文中必须给出合法议题 id，否则 related_issue_ids 只能瞎填被拒。"""
+    projection = actor_agent_projection(game(), "mayor")
+    issue_ids = {item["id"] for item in projection["issues"]}
+    assert issue_ids == {"industry_rectification", "fiscal_priorities", "flood_preparation"}
+    assert all("title" in item for item in projection["issues"])

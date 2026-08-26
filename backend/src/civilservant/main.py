@@ -34,6 +34,7 @@ from .daily_engine import (
     hydrate_daily_actor_state,
     is_daily_game,
     schedule_calendar_entry,
+    set_meeting_discussion_mode,
     start_conversation,
     start_field_visit,
     start_meeting,
@@ -60,6 +61,7 @@ from .daily_models import (
     MeetingVoteRequest,
     PlayerSpeechRequest,
     ScheduleRequest,
+    SetDiscussionModeRequest,
     StartConversationRequest,
     StartMeetingRequest,
     SubmitDocumentRequest,
@@ -371,6 +373,32 @@ def add_scene_materials(
             idempotency_key=payload.idempotency_key,
             record_version=payload.record_version,
             document_ids=payload.document_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _save(updated, game.version)
+    return to_daily_game_view(updated)
+
+
+@app.post(
+    "/api/games/{game_id}/scenes/{scene_id}/discussion-mode",
+    response_model=DailyGameView,
+)
+def set_scene_discussion_mode(
+    game_id: str,
+    scene_id: str,
+    payload: SetDiscussionModeRequest,
+) -> DailyGameView:
+    game, existing = _prepare_command(game_id, payload.version, payload.idempotency_key)
+    if existing:
+        return to_daily_game_view(game)
+    _require_scene(game, scene_id)
+    try:
+        updated = set_meeting_discussion_mode(
+            game,
+            idempotency_key=payload.idempotency_key,
+            record_version=payload.record_version,
+            discussion_mode=payload.discussion_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

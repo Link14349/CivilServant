@@ -14,6 +14,7 @@ import {
   requestDraft,
   scheduleEntry,
   sendPlayerSpeech,
+  setMeetingDiscussionMode,
   startConversation,
   startFieldVisit,
   startMeeting,
@@ -258,7 +259,8 @@ function GameBoard({ game, credentials, onGameChange, onNewGame, onChangeCredent
   const [agentTrace, setAgentTrace] = useState<AgentDebugTrace | null>(null);
 
   const activeSceneId = game.active_scene?.id ?? null;
-  const canBrowseDuringScene = game.active_scene?.kind === "conversation" || game.active_scene?.kind === "superior_meeting";
+  const canBrowseDuringScene = game.active_scene?.kind === "conversation" || game.active_scene?.kind === "superior_meeting" || game.active_scene?.kind === "meeting";
+  const sceneReturnNoun = game.active_scene ? sceneNoun(game.active_scene.kind) : "";
 
   useEffect(() => {
     setSceneMinimized(false);
@@ -364,9 +366,9 @@ function GameBoard({ game, credentials, onGameChange, onNewGame, onChangeCredent
           {error && <div className="error-banner" role="alert">{error}</div>}
           {game.notifications.slice(-2).map((item) => <div className={`notification ${item.tone}`} key={item.id}><strong>{item.title}</strong><span>{item.detail}</span></div>)}
           {game.active_scene && sceneMinimized && (
-            <section className="scene-return-banner" aria-label="进行中的面谈">
-              <div><strong>面谈仍在进行</strong><span>{game.active_scene.title} · 谈话状态和人物生成均已保留</span></div>
-              <button onClick={() => setSceneMinimized(false)}>返回面谈</button>
+            <section className="scene-return-banner" aria-label={`进行中的${sceneReturnNoun}`}>
+              <div><strong>{sceneReturnNoun}仍在进行</strong><span>{game.active_scene.title} · {sceneReturnNoun}状态和人物生成均已保留</span></div>
+              <button onClick={() => setSceneMinimized(false)}>返回{sceneReturnNoun}</button>
             </section>
           )}
           {game.active_scene && (
@@ -796,7 +798,7 @@ function SceneView({ game, credentials, busy, streamingGeneration, onBrowse, onM
         )}
       </div>
       {(scene.generation.status === "canceled" || scene.generation.status === "discarded") && <p className="generation-note">{scene.generation.message}</p>}
-      {isMeeting && <div className="meeting-controls"><span>{scene.discussion_mode === "free" ? "自由磋商：参会者会自行判断是否发言" : "主持磋商：由你点名发言"}</span>{scene.discussion_mode === "free" ? <button disabled={busy || thinking} onClick={() => void onMutate(() => generateMeetingSpeech(game, credentials))}>让会议继续</button> : <div className="nominate-list">{scene.participants.filter((item) => item.actor_id !== "player").map((item) => <button disabled={busy || thinking} key={item.actor_id} onClick={() => void onMutate(() => generateMeetingSpeech(game, credentials, item.actor_id))}>请{item.name}发言</button>)}</div>}</div>}
+      {isMeeting && <div className="meeting-controls"><div className="discussion-mode-switch" role="group" aria-label="讨论方式"><button className={scene.discussion_mode === "free" ? "active" : ""} disabled={busy || thinking} onClick={() => void onMutate(() => setMeetingDiscussionMode(game, credentials, "free"))}>自由磋商</button><button className={scene.discussion_mode === "chaired" ? "active" : ""} disabled={busy || thinking} onClick={() => void onMutate(() => setMeetingDiscussionMode(game, credentials, "chaired"))}>主持磋商</button></div><span>{scene.discussion_mode === "free" ? "参会者会自行判断是否发言" : "由你点名发言"}</span>{scene.discussion_mode === "free" ? <button disabled={busy || thinking} onClick={() => void onMutate(() => generateMeetingSpeech(game, credentials))}>让会议继续</button> : <div className="nominate-list">{scene.participants.filter((item) => item.actor_id !== "player").map((item) => <button disabled={busy || thinking} key={item.actor_id} onClick={() => void onMutate(() => generateMeetingSpeech(game, credentials, item.actor_id))}>请{item.name}发言</button>)}</div>}</div>}
       <div className="speech-box"><label htmlFor="player-speech">你的发言或追问</label><textarea id="player-speech" rows={4} value={speech} maxLength={2400} onChange={(event) => setSpeech(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!busy) void speak(); } }} placeholder={thinking ? "你可以随时发言，正在生成的 NPC 发言会被中断。" : "可以追问事实、表明目标、划定红线或作出交办。"} /><button className="primary-button" disabled={busy || !speech.trim()} onClick={() => void speak()}>{thinking ? "打断并发言" : "发言"}</button></div>
       {scene.can_vote && <div className="vote-box"><label htmlFor="resolution">拟表决事项</label><textarea id="resolution" rows={3} value={resolution} onChange={(event) => setResolution(event.target.value)} placeholder="写清需要集体表决的决定。" />{scene.vote_result ? <p>{scene.vote_result}</p> : <button disabled={busy || !resolution.trim() || thinking} onClick={() => void onMutate(() => voteMeeting(game, credentials, resolution.trim()))}>提请表决</button>}</div>}
       <div className="scene-footer"><span>结束后，人物会依据会谈内容形成记忆，并可能联络他人、准备材料或提出后续行动。</span><button className="ghost-button" disabled={busy || thinking} onClick={() => void onMutate(() => finishScene(game, credentials, resolution.trim()))}>结束并结算</button></div>
@@ -922,4 +924,5 @@ function documentStatus(value: string) { return ({ draft: "草稿", in_review: "
 function calendarStatus(value: string) { return ({ scheduled: "已预定", tentative: "暂定", due: "今日待办", active: "进行中", completed: "已完成", canceled: "已取消", conflict: "有冲突" } as Record<string, string>)[value] ?? value; }
 function scheduleKind(value: string) { return ({ conversation: "谈话", meeting: "会议", superior_meeting: "上级面谈", field_visit: "调研" } as Record<string, string>)[value] ?? value; }
 function sceneKind(value: string) { return ({ conversation: "个别谈话", meeting: "会议", superior_meeting: "向上汇报", field_visit: "现场调研" } as Record<string, string>)[value] ?? value; }
+function sceneNoun(value: string) { return ({ conversation: "面谈", meeting: "会议", superior_meeting: "汇报", field_visit: "调研" } as Record<string, string>)[value] ?? "面谈"; }
 function debugTraceStatus(value: AgentDebugTrace["status"]) { return ({ running: "运行中", completed: "已完成", fallback: "已降级", failed: "失败", canceled: "已中断" } as Record<AgentDebugTrace["status"], string>)[value]; }

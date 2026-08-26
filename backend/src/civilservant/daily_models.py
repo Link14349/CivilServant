@@ -84,6 +84,11 @@ class AddMeetingMaterialsRequest(CommandRequest):
     document_ids: List[str] = Field(min_length=1, max_length=12)
 
 
+class SetDiscussionModeRequest(CommandRequest):
+    record_version: int = Field(ge=0)
+    discussion_mode: DiscussionMode
+
+
 class PlayerSpeechRequest(CommandRequest):
     record_version: int = Field(ge=0)
     text: str = Field(min_length=1, max_length=2400)
