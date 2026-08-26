@@ -4,7 +4,7 @@ from copy import deepcopy
 from datetime import date
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .daily_models import AgentToolCall, AgentToolEffect
 from .daily_scenario import (
@@ -17,16 +17,24 @@ from .models import StoredGame
 
 
 
-class _FileListArgs(BaseModel):
+class _ToolArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _ContactListArgs(_ToolArgs):
+    query: str = Field(default="", max_length=120)
+
+
+class _FileListArgs(_ToolArgs):
     query: str = Field(default="", max_length=120)
     status: Optional[str] = Field(default=None, max_length=32)
 
 
-class _FileReadArgs(BaseModel):
+class _FileReadArgs(_ToolArgs):
     document_id: str = Field(min_length=1, max_length=160)
 
 
-class _FileWriteArgs(BaseModel):
+class _FileWriteArgs(_ToolArgs):
     title: str = Field(min_length=2, max_length=160)
     document_type: str = Field(default="briefing", max_length=48)
     summary: str = Field(min_length=2, max_length=400)
@@ -43,18 +51,30 @@ class _FileWriteArgs(BaseModel):
         return value
 
 
-class _FileReviseArgs(BaseModel):
+class _FileReviseArgs(_ToolArgs):
     document_id: str = Field(min_length=1, max_length=160)
     summary: str = Field(min_length=2, max_length=400)
     content: str = Field(min_length=2, max_length=8000)
 
 
-class _MemoryListArgs(BaseModel):
+class _MemoryListArgs(_ToolArgs):
     query: str = Field(default="", max_length=120)
     limit: int = Field(default=8, ge=1, le=20)
 
 
-class _MemoryWriteArgs(BaseModel):
+class _SceneListArgs(_ToolArgs):
+    query: str = Field(default="", max_length=120)
+
+
+class _SceneReadArgs(_ToolArgs):
+    scene_id: str = Field(min_length=1, max_length=160)
+
+
+class _NoArgs(_ToolArgs):
+    pass
+
+
+class _MemoryWriteArgs(_ToolArgs):
     summary: str = Field(min_length=2, max_length=600)
     memory_type: str = Field(default="episodic", max_length=32)
     importance: int = Field(default=3, ge=1, le=5)
@@ -63,7 +83,7 @@ class _MemoryWriteArgs(BaseModel):
     source_turn_ids: List[str] = Field(default_factory=list, max_length=20)
 
 
-class _KnowledgeWriteArgs(BaseModel):
+class _KnowledgeWriteArgs(_ToolArgs):
     claim: str = Field(min_length=2, max_length=800)
     source_type: str = Field(max_length=32)
     source_id: Optional[str] = Field(default=None, max_length=160)
@@ -86,7 +106,7 @@ class _KnowledgeWriteArgs(BaseModel):
         return value
 
 
-class _RelationshipArgs(BaseModel):
+class _RelationshipArgs(_ToolArgs):
     target_id: str = Field(min_length=1, max_length=128)
     signal: str = Field(max_length=16)
     note: str = Field(min_length=2, max_length=400)
@@ -100,7 +120,7 @@ class _RelationshipArgs(BaseModel):
         return value
 
 
-class _TodoWriteArgs(BaseModel):
+class _TodoWriteArgs(_ToolArgs):
     summary: str = Field(min_length=2, max_length=500)
     due_date: Optional[str] = Field(default=None, max_length=10)
     priority: str = Field(default="normal", max_length=16)
@@ -116,7 +136,7 @@ class _TodoWriteArgs(BaseModel):
         return value
 
 
-class _CommitmentArgs(BaseModel):
+class _CommitmentArgs(_ToolArgs):
     commitment_type: str = Field(default="instruction", max_length=32)
     giver_id: str = Field(min_length=1, max_length=128)
     receiver_id: str = Field(min_length=1, max_length=128)
@@ -141,7 +161,7 @@ class _CommitmentArgs(BaseModel):
         return value
 
 
-class _ContactArgs(BaseModel):
+class _ContactArgs(_ToolArgs):
     target_id: str = Field(min_length=1, max_length=128)
     summary: str = Field(min_length=2, max_length=500)
 
@@ -150,7 +170,7 @@ class _InformationArgs(_ContactArgs):
     title: Optional[str] = Field(default=None, max_length=160)
 
 
-class _ActionArgs(BaseModel):
+class _ActionArgs(_ToolArgs):
     summary: str = Field(min_length=2, max_length=500)
     action_type: str = Field(min_length=2, max_length=128)
     target_ids: List[str] = Field(default_factory=list, max_length=12)
@@ -160,26 +180,19 @@ class _ActionArgs(BaseModel):
 
 def agent_tool_catalog(phase: str) -> List[Dict[str, Any]]:
     tools: List[Dict[str, Any]] = [
-        _tool("list_contacts", "列出本人物认识的干部和利益相关方基本资料。", {"query": "string，可选"}),
-        _tool("list_visible_files", "列出本人物有权访问的游戏内文件。", {"query": "string，可选", "status": "string|null"}),
-        _tool("read_file", "读取一份有权限文件的完整正文、批注和来源。", {"document_id": "string"}),
+        _tool("list_contacts", "列出本人物认识的干部和利益相关方基本资料。", _ContactListArgs),
+        _tool("list_visible_files", "列出本人物有权访问的游戏内文件。", _FileListArgs),
+        _tool("read_file", "读取一份有权限文件的完整正文、批注和来源。", _FileReadArgs),
         _tool(
             "write_file",
             "新建本人物署名的游戏内草稿；deliver_to_ids非空时同时形成送达指定对象的就绪材料。",
-            {
-                "title": "string",
-                "document_type": "report|briefing|request|meeting_material|note|draft",
-                "summary": "string",
-                "content": "string",
-                "source_document_ids": ["document_id"],
-                "deliver_to_ids": ["player或认识的actor_id"],
-            },
+            _FileWriteArgs,
         ),
-        _tool("revise_file", "修改本人物仍可修订的草稿或退回文件。", {"document_id": "string", "summary": "string", "content": "string"}),
-        _tool("list_memories", "按关键词检索本人物自己的记忆。", {"query": "string，可选", "limit": "1-20"}),
-        _tool("list_scene_records", "列出本人物亲历过的已冻结谈话和会议记录。", {"query": "string，可选"}),
-        _tool("read_scene_record", "读取本人物亲历过的一次完整冻结记录。", {"scene_id": "string"}),
-        _tool("list_todos", "列出本人物尚未完成的待办。", {}),
+        _tool("revise_file", "修改本人物仍可修订的草稿或退回文件。", _FileReviseArgs),
+        _tool("list_memories", "按关键词检索本人物自己的记忆。", _MemoryListArgs),
+        _tool("list_scene_records", "列出本人物亲历过的已冻结谈话和会议记录。", _SceneListArgs),
+        _tool("read_scene_record", "读取本人物亲历过的一次完整冻结记录。", _SceneReadArgs),
+        _tool("list_todos", "列出本人物尚未完成的待办。", _NoArgs),
     ]
     if phase == "settlement":
         tools.extend(
@@ -187,75 +200,34 @@ def agent_tool_catalog(phase: str) -> List[Dict[str, Any]]:
                 _tool(
                     "record_knowledge",
                     "把本场景中新获得、推断或听说的一项信息写入动态认知，并保留来源与置信度。",
-                    {
-                        "claim": "string",
-                        "source_type": "transcript|document|observation|hearsay|inference",
-                        "source_id": "turn_id|document_id|null",
-                        "confidence": "low|medium|high",
-                        "related_actor_ids": ["actor_id"],
-                        "related_issue_ids": ["issue_id"],
-                    },
+                    _KnowledgeWriteArgs,
                 ),
                 _tool(
                     "record_memory",
                     "把本次亲历形成的私人记忆写入自己的记忆库。",
-                    {
-                        "summary": "string",
-                        "memory_type": "episodic|semantic|relationship",
-                        "importance": "1-5",
-                        "related_actor_ids": ["actor_id"],
-                        "related_issue_ids": ["issue_id"],
-                        "source_turn_ids": ["turn_id"],
-                    },
+                    _MemoryWriteArgs,
                 ),
                 _tool(
                     "record_todo",
                     "记录本人准备跟进的待办，不自动取得正式决策效力。",
-                    {
-                        "summary": "string",
-                        "due_date": "YYYY-MM-DD|null",
-                        "priority": "low|normal|high|urgent",
-                        "requires_formal_decision": "boolean",
-                        "related_actor_ids": ["actor_id"],
-                        "related_issue_ids": ["issue_id"],
-                    },
+                    _TodoWriteArgs,
                 ),
                 _tool(
                     "record_relationship_impression",
                     "记录本人物对一名亲历对象的工作关系印象变化；只改变本人物的主观看法。",
-                    {
-                        "target_id": "player或actor_id",
-                        "signal": "improved|unchanged|strained",
-                        "note": "string",
-                        "related_issue_id": "issue_id|null",
-                    },
+                    _RelationshipArgs,
                 ),
                 _tool(
                     "record_commitment",
                     "记录本场景中实际形成的交办、承诺或条件交换及其正式效力边界。",
-                    {
-                        "commitment_type": "instruction|promise|conditional_exchange|reporting_duty",
-                        "giver_id": "player或actor_id",
-                        "receiver_id": "player或actor_id",
-                        "summary": "string",
-                        "condition": "string|null",
-                        "due_date": "YYYY-MM-DD|null",
-                        "visibility": "private|participants|internal|public",
-                        "requires_formal_decision": "boolean",
-                    },
+                    _CommitmentArgs,
                 ),
-                _tool("contact_actor", "申请会后联系一名认识的人；只展开一跳。", {"target_id": "actor_id", "summary": "string"}),
-                _tool("request_information", "申请向认识的人或机构核实信息。", {"target_id": "actor_id", "title": "string|null", "summary": "string"}),
+                _tool("contact_actor", "申请会后联系一名认识的人；只展开一跳。", _ContactArgs),
+                _tool("request_information", "申请向认识的人或机构核实信息。", _InformationArgs),
                 _tool(
                     "propose_action",
                     "提出权限内准备或需要正式决定的行动意图。",
-                    {
-                        "summary": "string",
-                        "action_type": "string",
-                        "target_ids": ["actor_id"],
-                        "due_date": "YYYY-MM-DD|null",
-                        "requires_formal_decision": "boolean",
-                    },
+                    _ActionArgs,
                 ),
             ]
         )
@@ -271,7 +243,7 @@ def execute_agent_tool(
 ) -> Tuple[Dict[str, Any], Optional[AgentToolEffect]]:
     try:
         if call.name == "list_contacts":
-            query = str(call.arguments.get("query", "")).strip()
+            query = _ContactListArgs.model_validate(call.arguments).query.strip()
             contacts = _known_people(game, actor_id)
             if query:
                 contacts = [item for item in contacts if query in " ".join(str(value) for value in item.values())]
@@ -324,7 +296,7 @@ def execute_agent_tool(
                 memories = [item for item in memories if args.query in str(item.get("summary", ""))]
             return _ok(call, memories[-args.limit :]), None
         if call.name == "list_scene_records":
-            query = str(call.arguments.get("query", "")).strip()
+            query = _SceneListArgs.model_validate(call.arguments).query.strip()
             records = [
                 item
                 for item in game.state.get("scene_archive", [])
@@ -348,7 +320,7 @@ def execute_agent_tool(
             ]
             return _ok(call, data), None
         if call.name == "read_scene_record":
-            scene_id = str(call.arguments.get("scene_id", ""))
+            scene_id = _SceneReadArgs.model_validate(call.arguments).scene_id
             record = next(
                 (
                     item
@@ -379,6 +351,7 @@ def execute_agent_tool(
                 },
             ), None
         if call.name == "list_todos":
+            _NoArgs.model_validate(call.arguments)
             todos = [
                 item
                 for item in game.state["actor_runtime"][actor_id].get("tasks", [])
@@ -445,8 +418,15 @@ def execute_agent_tool(
         }, None
 
 
-def _tool(name: str, description: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    return {"name": name, "description": description, "arguments": arguments}
+def _tool(name: str, description: str, arguments_model: type[BaseModel]) -> Dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": arguments_model.model_json_schema(),
+        },
+    }
 
 
 def _ok(call: AgentToolCall, data: Any) -> Dict[str, Any]:

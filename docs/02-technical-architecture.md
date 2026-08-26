@@ -34,7 +34,7 @@
 
 - Base URL：`https://api.deepseek.com`；
 - 模型：`deepseek-v4-flash`；
-- 优先请求结构化 JSON；
+- 工具型 Agent 使用供应商原生 Tool Calls；没有工具的纯分类任务才请求结构化 JSON；
 - 模型不可用时明确报错，不静默切换供应商；
 - 模板模式在没有 Key 和网络时仍可运行逐日模拟。
 
@@ -302,7 +302,9 @@ Agent 可获得的游戏内工具按角色、场景和任务动态授权：
 | `record_relationship_impression` | 保存本人物对特定对象的工作关系判断 | 只更新主观关系 |
 | `record_commitment` | 保存交办、承诺或条件交换 | 创建结构化义务记录 |
 
-对话回复和获得发言权后的会议发言使用相同的 Agent Loop 协议。每轮模型只能选择调用工具或提交最终输出；单次调用最多四轮、八个工具。工具写操作先生成 `AgentToolEffect`，待最终文本、认知引用和场景记录版本全部校验成功后统一提交。
+对话回复和获得发言权后的会议发言使用相同的原生 Tool Calls 协议。工具通过 Chat Completions 请求顶层的 `tools` 注册，调用从 `message.tool_calls` 读取，执行结果以带 `tool_call_id` 的 `role: tool` 消息回传；模型完成工作时单独调用终止工具 `submit_final_result`。一次人物 Agent Loop 最多运行 128 轮，每轮可由供应商返回一个或多个工具调用。工具写操作先生成 `AgentToolEffect`，待最终文本、认知引用和场景记录版本全部校验成功后统一提交。
+
+不得在普通消息正文中要求模型手写 `{tool_calls, final}` 信封。原生工具参数仍需经过 Pydantic 校验；参数 JSON 不完整时把错误作为工具结果返回，允许人物在后续轮次修复。若供应商返回 `finish_reason=length`、内容过滤或资源不足，Harness 必须给出对应的可诊断错误并丢弃本轮全部暂存副作用。
 
 `propose_action` 的参数至少包括：
 

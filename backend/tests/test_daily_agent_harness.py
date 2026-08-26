@@ -1,3 +1,8 @@
+import json
+from copy import deepcopy
+
+import pytest
+
 from civilservant.daily_agent_tools import execute_agent_tool
 from civilservant.daily_engine import (
     act_on_document,
@@ -16,6 +21,7 @@ from civilservant.daily_models import (
     PostSceneResult,
 )
 from civilservant.daily_scenario import ACTORS, STANDING_COMMITTEE_MEMBER_IDS
+from civilservant.llm import LlmError
 
 
 def game(mode: str = "template"):
@@ -240,27 +246,58 @@ def test_handled_document_moves_to_archive_when_next_day_begins() -> None:
 class _LoopProvider(DailyAgentProvider):
     def __init__(self) -> None:
         super().__init__()
-        self.payloads = []
+        self.bodies = []
 
-    def _request(self, api_key, game, payload, max_tokens):
-        self.payloads.append(payload)
-        if len(self.payloads) == 1:
+    def _post_chat(self, api_key, game, body):
+        self.bodies.append(deepcopy(body))
+        if len(self.bodies) == 1:
             return {
-                "tool_calls": [
+                "choices": [
                     {
-                        "call_id": "contacts-1",
-                        "name": "list_contacts",
-                        "arguments": {"query": "财政"},
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "contacts-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "list_contacts",
+                                        "arguments": json.dumps({"query": "财政"}),
+                                    },
+                                }
+                            ],
+                        },
                     }
-                ],
-                "final": None,
+                ]
             }
         return {
-            "tool_calls": [],
-            "final": {
-                "text": "我会先让财政部门说明边界。",
-                "used_belief_ids": [],
-            },
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "final-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "submit_final_result",
+                                    "arguments": json.dumps(
+                                        {
+                                            "text": "我会先让财政部门说明边界。",
+                                            "used_belief_ids": [],
+                                        },
+                                        ensure_ascii=False,
+                                    ),
+                                },
+                            }
+                        ],
+                    },
+                }
+            ]
         }
 
 
@@ -279,6 +316,119 @@ def test_live_agent_loop_executes_tool_then_forms_final_reply() -> None:
         player_message="财政边界由谁先说明？",
     )
     assert result.text == "我会先让财政部门说明边界。"
-    assert len(provider.payloads) == 2
-    assert provider.payloads[1]["tool_results"][0]["ok"] is True
-    assert any(item["id"] == "finance_director" for item in provider.payloads[1]["tool_results"][0]["data"])
+    assert len(provider.bodies) == 2
+    first_body = provider.bodies[0]
+    assert first_body["tool_choice"] == "required"
+    assert "response_format" not in first_body
+    functions = {item["function"]["name"]: item["function"] for item in first_body["tools"]}
+    assert "list_contacts" in functions
+    assert functions["list_contacts"]["parameters"]["type"] == "object"
+    assert "submit_final_result" in functions
+    tool_message = provider.bodies[1]["messages"][-1]
+    assert tool_message["role"] == "tool"
+    tool_result = json.loads(tool_message["content"])
+    assert tool_result["ok"] is True
+    assert any(item["id"] == "finance_director" for item in tool_result["data"])
+
+
+class _LengthProvider(DailyAgentProvider):
+    def _post_chat(self, api_key, game, body):
+        return {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {"role": "assistant", "content": None, "tool_calls": []},
+                }
+            ]
+        }
+
+
+def test_native_agent_loop_reports_output_truncation_explicitly() -> None:
+    current = start_conversation(
+        game(mode="live"),
+        idempotency_key="start-length-loop",
+        actor_id="mayor",
+        channel="private_meeting",
+    )
+    with pytest.raises(LlmError, match="达到输出上限并被截断"):
+        _LengthProvider().resolve_conversation(
+            api_key="test-key",
+            game=current,
+            actor_id="mayor",
+            player_message="请说明情况。",
+        )
+
+
+class _RepairArgumentsProvider(DailyAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.bodies = []
+
+    def _post_chat(self, api_key, game, body):
+        self.bodies.append(deepcopy(body))
+        if len(self.bodies) == 1:
+            return {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "broken-arguments",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "read_file",
+                                        "arguments": '{"document_id":',
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "final-after-repair",
+                                "type": "function",
+                                "function": {
+                                    "name": "submit_final_result",
+                                    "arguments": json.dumps(
+                                        {"text": "刚才的工具参数无效，我先说明已知边界。", "used_belief_ids": []},
+                                        ensure_ascii=False,
+                                    ),
+                                },
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+
+
+def test_native_agent_loop_returns_tool_argument_error_for_model_repair() -> None:
+    current = start_conversation(
+        game(mode="live"),
+        idempotency_key="start-repair-loop",
+        actor_id="mayor",
+        channel="private_meeting",
+    )
+    provider = _RepairArgumentsProvider()
+    result = provider.resolve_conversation(
+        api_key="test-key",
+        game=current,
+        actor_id="mayor",
+        player_message="请读材料后说明。",
+    )
+    assert result.text.startswith("刚才的工具参数无效")
+    repair_message = provider.bodies[1]["messages"][-1]
+    assert repair_message["role"] == "tool"
+    assert "error_position" in repair_message["content"]
