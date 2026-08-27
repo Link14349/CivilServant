@@ -530,6 +530,82 @@ def test_settlement_fallback_preserves_staged_memory_effects() -> None:
     )
 
 
+class _EmptyProbeProvider(DailyAgentProvider):
+    """前三轮用不同 query 反复探测空文件列表，之后才提交最终结果。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.call_index = 0
+        self.bodies = []
+
+    def _post_chat(self, api_key, game, body):
+        self.call_index += 1
+        self.bodies.append(deepcopy(body))
+        if self.call_index <= 3:
+            arguments = {"query": "探测-{}".format(self.call_index)}
+            name = "list_visible_files"
+        else:
+            arguments = {"text": "基于现有材料的答复", "used_belief_ids": []}
+            name = "submit_final_result"
+        return {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call-probe-{}".format(self.call_index),
+                                "type": "function",
+                                "function": {"name": name, "arguments": json.dumps(arguments)},
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+
+
+def test_repeated_empty_probe_triggers_convergence_guard() -> None:
+    """修复回归：同工具连续多次探测空列表必须被强制收敛，不能放任换关键词反复查询烧轮次。"""
+    current = start_conversation(
+        game(mode="live"),
+        idempotency_key="start-empty-probe-loop",
+        actor_id="mayor",
+        channel="private_meeting",
+    )
+    provider = _EmptyProbeProvider()
+    traces = []
+    result = provider.resolve_conversation(
+        api_key="test-key",
+        game=current,
+        actor_id="mayor",
+        player_message="请说明情况。",
+        on_trace=traces.append,
+    )
+    assert result.text == "基于现有材料的答复"
+    # 第 3 轮探测返回空后守卫触发，第 4 轮开始强制提交，不会拖到 32 轮。
+    assert provider.call_index <= 5
+    guards = [item for item in traces if item["kind"] == "convergence_guard"]
+    assert any(item["title"] == "空检索重复探测，强制提交最终结果" for item in guards)
+    assert any(
+        "已连续多次返回空列表" in item["payload"]["result"].get("error", "")
+        for item in traces
+        if item["kind"] == "tool_result"
+    )
+    # 守卫原地替换结果消息后，任何请求体里同一 call_id 都只能有一条 tool 消息，
+    # 否则 DeepSeek/OpenAI 会对连续重复 tool 消息返回 HTTP 400。
+    for body in provider.bodies:
+        seen_ids = set()
+        for message in body["messages"]:
+            if message.get("role") != "tool":
+                continue
+            tool_call_id = message.get("tool_call_id")
+            assert tool_call_id not in seen_ids, "同一 call_id 出现两条 tool 消息：{}".format(tool_call_id)
+            seen_ids.add(tool_call_id)
+
+
 class _UniqueUntilForcedProvider(DailyAgentProvider):
     def __init__(self) -> None:
         super().__init__()

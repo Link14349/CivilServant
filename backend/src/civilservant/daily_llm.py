@@ -28,6 +28,16 @@ MAX_AGENT_LOOP_ROUNDS = 128
 PREFERRED_AGENT_LOOP_ROUNDS = 32
 MAX_FINAL_REPAIR_ATTEMPTS = 3
 MAX_CONSECUTIVE_TOOL_FAILURES = 3
+# 同一只读列表工具连续多次返回空列表时，说明该列表当前确实为空；达到阈值即强制收敛，
+# 避免模型换着关键词反复查询空列表烧轮次。
+EMPTY_PROBE_LIMIT = 3
+EMPTY_LIST_TOOLS = {
+    "list_contacts",
+    "list_visible_files",
+    "list_memories",
+    "list_scene_records",
+    "list_todos",
+}
 
 
 class AgentGenerationCanceled(RuntimeError):
@@ -58,8 +68,10 @@ class DailyAgentProvider:
             phase="interaction",
             task="conversation_reply",
             instruction=(
-                "以当前人物身份直接回应玩家。需要核对材料、过去记录或联系人时先调用工具；"
-                "可以在权限内形成或修改自己的游戏内工作草稿。"
+                "以当前人物身份直接回应玩家。联系人名单、可见文件、亲历记录、待办与背景材料都已包含在上下文中，"
+                "不要为了确认而反复检索；需要核对某份文件的正文时先 list_visible_files 拿到文件 ID 再 read_file，"
+                "不要凭想象构造文件 ID。可以在权限内形成或修改自己的游戏内工作草稿。"
+                "信息足够时立即调用 submit_final_result 提交回应，不要重复调用同一检索工具。"
             ),
             task_input={"player_message": player_message},
             final_schema={
@@ -219,6 +231,7 @@ class DailyAgentProvider:
         staged_effects: List[AgentToolEffect] = []
         seen_tool_calls: Dict[str, int] = {}
         consecutive_tool_failures = 0
+        empty_probe_streaks: Dict[str, int] = {}
         final_repair_attempts = 0
         force_final = False
         messages: List[Dict[str, Any]] = [
@@ -557,6 +570,39 @@ class DailyAgentProvider:
                     consecutive_tool_failures += 1
                     if consecutive_tool_failures >= MAX_CONSECUTIVE_TOOL_FAILURES:
                         force_final = True
+                # 空结果反复探测防护：同一只读列表工具连续多次返回空列表即强制收敛。
+                if tool_result.get("ok") and call.name in EMPTY_LIST_TOOLS:
+                    data = tool_result.get("data")
+                    if isinstance(data, list) and not data:
+                        empty_probe_streaks[call.name] = empty_probe_streaks.get(call.name, 0) + 1
+                    else:
+                        empty_probe_streaks[call.name] = 0
+                    if empty_probe_streaks.get(call.name, 0) >= EMPTY_PROBE_LIMIT:
+                        empty_probe_streaks[call.name] = 0
+                        force_final = True
+                        guard_message = {
+                            "ok": False,
+                            "error": (
+                                "“{}”已连续多次返回空列表，说明当前确实没有该内容；"
+                                "不要继续查询，请基于已有上下文直接作答并调用 submit_final_result 提交。"
+                            ).format(call.name),
+                        }
+                        # 原地替换本轮刚追加的 tool 结果消息，避免同一 call_id 出现两条连续 tool 消息
+                        # （那会让 DeepSeek/OpenAI 返回 400）。
+                        messages[-1] = _tool_message(call_id, guard_message)
+                        _emit_tool_result(on_trace, round_number, call_id, call.name, guard_message)
+                        _emit_trace(
+                            on_trace,
+                            {
+                                "kind": "convergence_guard",
+                                "round": round_number,
+                                "title": "空检索重复探测，强制提交最终结果",
+                                "payload": {
+                                    "tool_name": call.name,
+                                    "empty_probe_limit": EMPTY_PROBE_LIMIT,
+                                },
+                            },
+                        )
             if round_number >= PREFERRED_AGENT_LOOP_ROUNDS - 1:
                 force_final = True
                 _emit_trace(

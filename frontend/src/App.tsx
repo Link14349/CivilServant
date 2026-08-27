@@ -257,6 +257,16 @@ function GameBoard({ game, credentials, onGameChange, onNewGame, onChangeCredent
   const [sceneMinimized, setSceneMinimized] = useState(false);
   const [debugMode, setDebugMode] = useState(() => sessionStorage.getItem(STORAGE.agentDebug) === "1");
   const [agentTrace, setAgentTrace] = useState<AgentDebugTrace | null>(null);
+  // 笔记本草稿提升到 GameBoard 层，避免切页或展开场景时组件卸载把未保存内容丢掉。
+  const [notebookDraft, setNotebookDraft] = useState<NotebookDraft>(() => {
+    const last = game.notebook_notes.at(-1);
+    return {
+      selectedId: last?.id ?? NEW_NOTE_ID,
+      title: last?.title ?? "工作要点",
+      content: last?.content ?? "",
+      pendingCreateCount: null,
+    };
+  });
 
   const activeSceneId = game.active_scene?.id ?? null;
   const canBrowseDuringScene = game.active_scene?.kind === "conversation" || game.active_scene?.kind === "superior_meeting" || game.active_scene?.kind === "meeting";
@@ -265,6 +275,18 @@ function GameBoard({ game, credentials, onGameChange, onNewGame, onChangeCredent
   useEffect(() => {
     setSceneMinimized(false);
   }, [activeSceneId]);
+
+  useEffect(() => {
+    if (notebookDraft.selectedId === NEW_NOTE_ID && notebookDraft.pendingCreateCount !== null && game.notebook_notes.length > notebookDraft.pendingCreateCount) {
+      const latest = game.notebook_notes.at(-1)!;
+      setNotebookDraft((prev) => ({ ...prev, selectedId: latest.id, title: latest.title, content: latest.content, pendingCreateCount: null }));
+      return;
+    }
+    if (notebookDraft.selectedId !== NEW_NOTE_ID && !game.notebook_notes.some((item) => item.id === notebookDraft.selectedId)) {
+      const fallback = game.notebook_notes.at(-1);
+      setNotebookDraft((prev) => ({ ...prev, selectedId: fallback?.id ?? NEW_NOTE_ID, title: fallback?.title ?? "工作要点", content: fallback?.content ?? "" }));
+    }
+  }, [game.notebook_notes, notebookDraft.selectedId, notebookDraft.pendingCreateCount]);
 
   useEffect(() => {
     const source = new EventSource(`/api/games/${game.id}/stream?debug=${debugMode ? "1" : "0"}`);
@@ -383,7 +405,7 @@ function GameBoard({ game, credentials, onGameChange, onNewGame, onChangeCredent
               {tab === "reference" && <ReferenceDesk materials={game.reference_materials} />}
               {tab === "calendar" && <CalendarDesk game={game} credentials={credentials} busy={busy} onMutate={mutate} onAdd={() => setPanel("schedule")} />}
               {tab === "activity" && <ActivityDesk game={game} />}
-              {tab === "notebook" && <NotebookDesk game={game} credentials={credentials} busy={busy} onMutate={mutate} />}
+              {tab === "notebook" && <NotebookDesk game={game} credentials={credentials} busy={busy} onMutate={mutate} draft={notebookDraft} onDraftChange={setNotebookDraft} />}
             </>
           )}
         </main>
@@ -513,53 +535,37 @@ function CalendarDesk({ game, credentials, busy, onMutate, onAdd }: { game: Game
 
 const NEW_NOTE_ID = "__new-note__";
 
-function NotebookDesk({ game, credentials, busy, onMutate }: {
+type NotebookDraft = {
+  selectedId: string;
+  title: string;
+  content: string;
+  pendingCreateCount: number | null;
+};
+
+function NotebookDesk({ game, credentials, busy, onMutate, draft, onDraftChange }: {
   game: Game;
   credentials: Credentials;
   busy: boolean;
   onMutate: (operation: () => Promise<Game>) => Promise<void>;
+  draft: NotebookDraft;
+  onDraftChange: (next: NotebookDraft) => void;
 }) {
-  const [selectedId, setSelectedId] = useState(game.notebook_notes.at(-1)?.id ?? NEW_NOTE_ID);
-  const initialNote = game.notebook_notes.find((item) => item.id === selectedId);
-  const [title, setTitle] = useState(initialNote?.title ?? "工作要点");
-  const [content, setContent] = useState(initialNote?.content ?? "");
-  const [pendingCreateCount, setPendingCreateCount] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (selectedId === NEW_NOTE_ID && pendingCreateCount !== null && game.notebook_notes.length > pendingCreateCount) {
-      const latest = game.notebook_notes.at(-1)!;
-      setSelectedId(latest.id);
-      setTitle(latest.title);
-      setContent(latest.content);
-      setPendingCreateCount(null);
-      return;
-    }
-    if (selectedId !== NEW_NOTE_ID && !game.notebook_notes.some((item) => item.id === selectedId)) {
-      const fallback = game.notebook_notes.at(-1);
-      setSelectedId(fallback?.id ?? NEW_NOTE_ID);
-      setTitle(fallback?.title ?? "工作要点");
-      setContent(fallback?.content ?? "");
-    }
-  }, [game.notebook_notes, pendingCreateCount, selectedId]);
+  const { selectedId, title, content } = draft;
 
   function chooseNote(noteId: string) {
     const note = game.notebook_notes.find((item) => item.id === noteId);
     if (!note) return;
-    setSelectedId(note.id);
-    setTitle(note.title);
-    setContent(note.content);
+    onDraftChange({ selectedId: note.id, title: note.title, content: note.content, pendingCreateCount: null });
   }
 
   function newNote() {
-    setSelectedId(NEW_NOTE_ID);
-    setTitle("工作要点");
-    setContent("");
+    onDraftChange({ selectedId: NEW_NOTE_ID, title: "工作要点", content: "", pendingCreateCount: null });
   }
 
   async function saveNote() {
     if (!title.trim() || !content.trim()) return;
     if (selectedId === NEW_NOTE_ID) {
-      setPendingCreateCount(game.notebook_notes.length);
+      onDraftChange({ ...draft, pendingCreateCount: game.notebook_notes.length });
       await onMutate(() => createNotebookNote(game, credentials, title.trim(), content.trim()));
       return;
     }
@@ -572,11 +578,8 @@ function NotebookDesk({ game, credentials, busy, onMutate }: {
 
   async function deleteNote() {
     if (selectedId === NEW_NOTE_ID || !window.confirm("删除这条私人笔记？删除后无法恢复。")) return;
-    const noteId = selectedId;
-    setSelectedId(NEW_NOTE_ID);
-    setTitle("工作要点");
-    setContent("");
-    await onMutate(() => updateNotebookNote(game, credentials, noteId, { operation: "delete" }));
+    onDraftChange({ selectedId: NEW_NOTE_ID, title: "工作要点", content: "", pendingCreateCount: null });
+    await onMutate(() => updateNotebookNote(game, credentials, selectedId, { operation: "delete" }));
   }
 
   return (
@@ -600,9 +603,9 @@ function NotebookDesk({ game, credentials, busy, onMutate }: {
         </nav>
         <article className="notebook-editor">
           <label className="field-label" htmlFor="notebook-title">标题</label>
-          <input id="notebook-title" className="text-input" maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} />
+          <input id="notebook-title" className="text-input" maxLength={120} value={title} onChange={(event) => onDraftChange({ ...draft, title: event.target.value })} />
           <label className="field-label" htmlFor="notebook-content">正文</label>
-          <textarea id="notebook-content" rows={16} maxLength={12000} value={content} onChange={(event) => setContent(event.target.value)} placeholder="例如：财政口径仍需与水利局附件交叉核实；下次面谈追问资金来源。" />
+          <textarea id="notebook-content" rows={16} maxLength={12000} value={content} onChange={(event) => onDraftChange({ ...draft, content: event.target.value })} placeholder="例如：财政口径仍需与水利局附件交叉核实；下次面谈追问资金来源。" />
           <footer>
             {selectedId !== NEW_NOTE_ID && <button className="danger-text-button" disabled={busy} onClick={() => void deleteNote()}>删除</button>}
             <span>{content.length} / 12000</span>
@@ -674,7 +677,6 @@ function SceneView({ game, credentials, busy, streamingGeneration, onBrowse, onM
   const scene = game.active_scene!;
   const [speech, setSpeech] = useState("");
   const [resolution, setResolution] = useState("");
-  const [typed, setTyped] = useState({ generationId: "", text: "" });
   const [dismissedGenerationId, setDismissedGenerationId] = useState("");
   const [materialDocumentId, setMaterialDocumentId] = useState("");
   const isMeeting = scene.kind === "meeting";
@@ -691,33 +693,19 @@ function SceneView({ game, credentials, busy, streamingGeneration, onBrowse, onM
   const stream = streamingGeneration?.generation_id === scene.generation.id
     ? streamingGeneration
     : null;
+  // SSE 快照已经代表模型实际到达进度；这里必须原样渲染，不能再拆字或定时追赶。
   const targetText = stream?.text ?? "";
 
   useEffect(() => {
     if (!stream) return;
-    if (typed.generationId !== stream.generation_id) {
-      setTyped({ generationId: stream.generation_id, text: "" });
-      setDismissedGenerationId("");
-      return;
-    }
-    if (typed.text === targetText) return;
-    if (!targetText.startsWith(typed.text)) {
-      setTyped({ generationId: stream.generation_id, text: targetText });
-      return;
-    }
-    const nextCharacter = Array.from(targetText.slice(typed.text.length))[0];
-    if (!nextCharacter) return;
-    const timer = window.setTimeout(() => {
-      setTyped((current) => ({ ...current, text: current.text + nextCharacter }));
-    }, 18);
-    return () => window.clearTimeout(timer);
-  }, [stream, targetText, typed]);
+    setDismissedGenerationId((current) => current === stream.generation_id ? current : "");
+  }, [stream?.generation_id]);
 
   useEffect(() => {
-    if (!stream || stream.status !== "completed" || typed.text !== targetText || !targetText) return;
+    if (!stream || stream.status !== "completed" || !targetText) return;
     const timer = window.setTimeout(() => setDismissedGenerationId(stream.generation_id), 260);
     return () => window.clearTimeout(timer);
-  }, [stream, targetText, typed.text]);
+  }, [stream, targetText]);
 
   useEffect(() => {
     if (!stream || !["canceled", "failed"].includes(stream.status)) return;
@@ -742,7 +730,7 @@ function SceneView({ game, credentials, busy, streamingGeneration, onBrowse, onM
   useEffect(() => {
     const element = transcriptRef.current;
     if (element) element.scrollTop = element.scrollHeight;
-  }, [scene.transcript, typed.text]);
+  }, [scene.transcript, targetText]);
 
   async function speak() {
     if (!speech.trim()) return;
@@ -793,7 +781,7 @@ function SceneView({ game, credentials, busy, streamingGeneration, onBrowse, onM
         {showStream && stream && (
           <article className={`npc streaming ${stream.status}`} key={`stream-${stream.generation_id}`}>
             <div>{stream.actor_name}</div>
-            <p>{typed.text || <span className="stream-placeholder">……</span>}<i className="typing-caret" aria-hidden="true" /></p>
+            <p>{targetText || <span className="stream-placeholder">……</span>}<i className="typing-caret" aria-hidden="true" /></p>
           </article>
         )}
       </div>

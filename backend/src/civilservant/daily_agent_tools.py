@@ -206,7 +206,10 @@ def execute_agent_tool(
             query = _ContactListArgs.model_validate(call.arguments).query.strip()
             contacts = _known_people(game, actor_id)
             if query:
-                contacts = [item for item in contacts if query in " ".join(str(value) for value in item.values())]
+                filtered = [item for item in contacts if query in " ".join(str(value) for value in item.values())]
+                # 过滤为空时回退全量名单，避免模型在不知道名字的情况下反复猜 query 走进死胡同。
+                if filtered:
+                    contacts = filtered
             return _ok(call, contacts[:40]), None
         if call.name == "list_visible_files":
             args = _FileListArgs.model_validate(call.arguments)
@@ -537,11 +540,13 @@ def _find_visible_document(
     document_id: str,
     staged_effects: Sequence[AgentToolEffect],
 ) -> Dict[str, Any]:
-    document = next(
-        (item for item in _visible_documents(game, actor_id, staged_effects) if item["id"] == document_id),
-        None,
-    )
+    visible = _visible_documents(game, actor_id, staged_effects)
+    document = next((item for item in visible if item["id"] == document_id), None)
     if document is None:
+        if not visible:
+            raise ValueError(
+                "本人物当前没有可见文件，无法读取任何文件；先 list_visible_files 确认，不要凭想象构造文件 ID。"
+            )
         raise ValueError("文件不存在或本人物无权读取")
     return document
 
